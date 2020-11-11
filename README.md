@@ -13,7 +13,8 @@ Implements the LOLA ([AAMAS'18](https://arxiv.org/abs/1709.04326)) and LOLA-DiCE
 To run the code, you need to pip-install it as follows:
 
 ```bash
-$ pip install -e .
+conda create -n lola python=3.5
+pip install -e .
 ```
 
 After installation, you can run different experiments using the run scripts provided in `scripts/`.

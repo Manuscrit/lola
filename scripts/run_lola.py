@@ -131,11 +131,17 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
     elif exp_name == "CoinGame":
         env = CG(trace_length, batch_size, grid_size)
         gamma = 0.96 if gamma is None else gamma
+    elif exp_name == "AssymCoinGame":
+        env = AssymCG(trace_length, batch_size, grid_size)
+        gamma = 0.96 if gamma is None else gamma
 
     # Run training
     for seed in range(trials):
+        logger.reset()
         logger.configure(dir='logs/{}/seed-{}'.format(exp_name, seed))
         start_time = time.time()
+        if exp_name == "CoinGame":
+            env.seed(seed)
         run(env)
         end_time  = time.time()
 

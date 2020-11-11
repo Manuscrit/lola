@@ -1,7 +1,8 @@
 import gym
 import numpy as np
 
-from gym.spaces import prng
+import gym.spaces
+from gym.utils import seeding
 
 
 class OneHot(gym.Space):
@@ -11,8 +12,13 @@ class OneHot(gym.Space):
     def __init__(self, n):
         self.n = n
 
+    def seed(self, seed=None):
+        """Seed the PRNG of this space. """
+        self.np_random, seed = seeding.np_random(seed)
+        return [seed]
+
     def sample(self):
-        return prng.np_random.multinomial(1, [1. / self.n] * self.n)
+        return self.np_random.multinomial(1, [1. / self.n] * self.n)
 
     def contains(self, x):
         return isinstance(x, np.ndarray) and \

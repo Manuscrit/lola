@@ -5,10 +5,12 @@ import gym
 import numpy as np
 
 from gym.spaces import Discrete, Tuple
-from gym.spaces import prng
+from gym.utils import seeding
 
 
-class CoinGameVec:
+# class CoinGameVec:
+class CoinGameVec(gym.Env):
+
     """
     Vectorized Coin Game environment.
     Note: slightly deviates from the Gym API.
@@ -30,20 +32,27 @@ class CoinGameVec:
         self.ob_space_shape = [4, grid_size, grid_size]
 
         self.step_count = None
+        self.np_random = None
+
+    def seed(self, seed=None):
+        """Seed the PRNG of this space. """
+        self.np_random, seed = seeding.np_random(seed)
+        return [seed]
+
 
     def reset(self):
         self.step_count = 0
-        self.red_coin = prng.np_random.randint(2, size=self.batch_size)
+        self.red_coin = self.np_random.randint(2, size=self.batch_size)
         # Agent and coin positions
-        self.red_pos  = prng.np_random.randint(
+        self.red_pos  = self.np_random.randint(
             self.grid_size, size=(self.batch_size, 2))
-        self.blue_pos = prng.np_random.randint(
+        self.blue_pos = self.np_random.randint(
             self.grid_size, size=(self.batch_size, 2))
         self.coin_pos = np.zeros((self.batch_size, 2), dtype=np.int8)
         for i in range(self.batch_size):
             # Make sure coins don't overlap
             while self._same_pos(self.red_pos[i], self.blue_pos[i]):
-                self.blue_pos[i] = prng.np_random.randint(self.grid_size, size=2)
+                self.blue_pos[i] = self.np_random.randint(self.grid_size, size=2)
             self._generate_coin(i)
         return self._generate_state()
 
@@ -52,7 +61,7 @@ class CoinGameVec:
         # Make sure coin has a different position than the agents
         success = 0
         while success < 2:
-            self.coin_pos[i] = prng.np_random.randint(self.grid_size, size=(2))
+            self.coin_pos[i] = self.np_random.randint(self.grid_size, size=(2))
             success  = 1 - self._same_pos(self.red_pos[i],
                                           self.coin_pos[i])
             success += 1 - self._same_pos(self.blue_pos[i],
@@ -72,6 +81,34 @@ class CoinGameVec:
                 state[i, 3, self.coin_pos[i][0], self.coin_pos[i][1]] = 1
         return state
 
+    def _compute_rewards(self):
+        reward_red, reward_blue = [], []
+        for i in range(self.batch_size):
+            generate = False
+            reward_red.append(0)
+            reward_blue.append(0)
+            if self.red_coin[i]:
+                if self._same_pos(self.red_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_red[i] += 1
+                if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_red[i] += -2
+                    reward_blue[i] += 1
+
+            else:
+                if self._same_pos(self.red_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_red[i] += 1
+                    reward_blue[i] += -2
+                if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_blue[i] += 1
+
+            if generate:
+                self._generate_coin(i)
+        return reward_red, reward_blue
+
     def step(self, actions):
         for j in range(self.batch_size):
             ac0, ac1 = actions[j]
@@ -83,38 +120,7 @@ class CoinGameVec:
             self.blue_pos[j] = \
                 (self.blue_pos[j] + self.MOVES[ac1]) % self.grid_size
 
-        # Compute rewards
-        reward_red, reward_blue = [], []
-        for i in range(self.batch_size):
-            generate = False
-            if self.red_coin[i]:
-                if self._same_pos(self.red_pos[i], self.coin_pos[i]):
-                    generate = True
-                    reward_red.append(1)
-                    reward_blue.append(0)
-                elif self._same_pos(self.blue_pos[i], self.coin_pos[i]):
-                    generate = True
-                    reward_red.append(-2)
-                    reward_blue.append(1)
-                else:
-                    reward_red.append(0)
-                    reward_blue.append(0)
-
-            else:
-                if self._same_pos(self.red_pos[i], self.coin_pos[i]):
-                    generate = True
-                    reward_red.append(1)
-                    reward_blue.append(-2)
-                elif self._same_pos(self.blue_pos[i], self.coin_pos[i]):
-                    generate = True
-                    reward_red.append(0)
-                    reward_blue.append(1)
-                else:
-                    reward_red.append(0)
-                    reward_blue.append(0)
-
-            if generate:
-                self._generate_coin(i)
+        reward_red, reward_blue = self._compute_rewards()
 
         reward = [np.array(reward_red), np.array(reward_blue)]
         self.step_count += 1
@@ -124,3 +130,36 @@ class CoinGameVec:
         state = self._generate_state()
 
         return state, reward, done
+
+
+
+
+class AsymCoinGameVec(CoinGameVec):
+
+    def _compute_rewards(self):
+        reward_red, reward_blue = [], []
+        for i in range(self.batch_size):
+            generate = False
+            reward_red.append(0)
+            reward_blue.append(0)
+            if self.red_coin[i]:
+                if self._same_pos(self.red_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_red[i] += 2
+                if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_red[i] += -1
+                    reward_blue[i] += 1
+
+            else:
+                if self._same_pos(self.red_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_red[i] += 1
+                    reward_blue[i] += -2
+                if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
+                    generate = True
+                    reward_blue[i] += 1
+
+            if generate:
+                self._generate_coin(i)
+        return reward_red, reward_blue

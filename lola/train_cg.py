@@ -136,7 +136,7 @@ def train(env, *, num_episodes, trace_length, batch_size,
             trainBatch0 = [[], [], [], [], [], []]
             trainBatch1 = [[], [], [], [], [], []]
             d = False
-            rAll = np.zeros((4))
+            rAll = np.zeros((7))
             aAll = np.zeros((env.NUM_ACTIONS * 2))
             j = 0
 
@@ -190,15 +190,30 @@ def train(env, *, num_episodes, trace_length, batch_size,
 
                 for index in range(batch_size):
                     r_pb = [r[0][index], r[1][index]]
+                    # if np.array(r_pb).any():
+                    #     if r_pb[0] == 1 and r_pb[1] == 0:
+                    #         rAll[0] += 1
+                    #     elif r_pb[0] == 0 and r_pb[1] == 1:
+                    #         rAll[1] += 1
+                    #     elif r_pb[0] == 1 and r_pb[1] == -2:
+                    #         rAll[2] += 1
+                    #     elif r_pb[0] == -2 and r_pb[1] == 1:
+                    #         rAll[3] += 1
                     if np.array(r_pb).any():
-                        if r_pb[0] == 1 and r_pb[1] == 0:
+                        if r_pb[0] > 0 and r_pb[1] == 0:
                             rAll[0] += 1
-                        elif r_pb[0] == 0 and r_pb[1] == 1:
+                        elif r_pb[0] == 0 and r_pb[1] > 0:
                             rAll[1] += 1
-                        elif r_pb[0] == 1 and r_pb[1] == -2:
+                        elif r_pb[0] > 0 and r_pb[1] < -1:
                             rAll[2] += 1
-                        elif r_pb[0] == -2 and r_pb[1] == 1:
+                        elif r_pb[0] < -1 and r_pb[1] > 0:
                             rAll[3] += 1
+                        elif r_pb[0] > 0 and r_pb[1] < 0:
+                            rAll[4] += 1
+                        elif r_pb[0] < 0 and r_pb[1] > 0:
+                            rAll[5] += 1
+                        rAll[6] += r_pb[0]
+                        rAll[6] += r_pb[1]
 
                 aAll[a_all[0]] += 1
                 aAll[a_all[1] + 4] += 1
@@ -263,7 +278,7 @@ def train(env, *, num_episodes, trace_length, batch_size,
                     mainPN_clone[1].gamma_array: np.reshape(discount,[1,-1]),
                 }
                 num_loops = 50 if i == 0 else 1
-                for i in range(num_loops):
+                for _ in range(num_loops):
                     sess.run(update_clone, feed_dict=feed_dict)
 
                 theta_1_vals = mainPN[0].getparams()
@@ -334,7 +349,8 @@ def train(env, *, num_episodes, trace_length, batch_size,
 
             if len(rList) % summary_len == 0 and len(rList) != 0 and updated:
                 updated = False
-                print(total_steps, 'reward', np.sum(rList[-summary_len:], 0))
+                print("n epi", i, "over", num_episodes, "total_steps", total_steps)
+                print('reward', np.sum(rList[-summary_len:], 0))
                 rlog = np.sum(rList[-summary_len:], 0)
                 for ii in range(len(rlog)):
                     logger.record_tabular('rList['+str(ii)+']', rlog[ii])

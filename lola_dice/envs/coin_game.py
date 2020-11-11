@@ -5,7 +5,9 @@ import gym
 import numpy as np
 
 from gym.spaces import Discrete, Tuple
-from gym.spaces import prng
+# from gym.spaces import self
+from gym.utils import seeding
+from collections import deque
 
 
 class CoinGameVec(gym.Env):
@@ -35,25 +37,33 @@ class CoinGameVec(gym.Env):
         ]
 
         self.step_count = None
+        self.np_random = None
+        self.gene_rate_avg = deque(maxlen=100)
+
+    def seed(self, seed=None):
+        """Seed the PRNG of this space. """
+        self.np_random, seed = seeding.np_random(seed)
+        return [seed]
 
     def reset(self):
         self.step_count = 0
-        self.red_coin = prng.np_random.randint(2, size=self.batch_size)
+        self.red_coin = self.np_random.randint(2, size=self.batch_size)
         # Agent and coin positions
-        self.red_pos  = prng.np_random.randint(
+        self.red_pos  = self.np_random.randint(
             self.grid_size, size=(self.batch_size, 2))
-        self.blue_pos = prng.np_random.randint(
+        self.blue_pos = self.np_random.randint(
             self.grid_size, size=(self.batch_size, 2))
         self.coin_pos = np.zeros((self.batch_size, 2), dtype=np.int8)
         for i in range(self.batch_size):
             # Make sure coins don't overlap
             while self._same_pos(self.red_pos[i], self.blue_pos[i]):
-                self.blue_pos[i] = prng.np_random.randint(self.grid_size, size=2)
+                self.blue_pos[i] = self.np_random.randint(self.grid_size, size=2)
             self._generate_coin(i)
         state = self._generate_state()
-        state = np.reshape(state, (self.batch_size, -1))
+        # state = np.reshape(state, (self.batch_size, -1))
         observations = [state, state]
         info = [{'available_actions': aa} for aa in self.available_actions]
+        info = {"available_actions": info}
         return observations, info
 
     def _generate_coin(self, i):
@@ -62,8 +72,8 @@ class CoinGameVec(gym.Env):
         success = 0
         while success < 2:
             success = 0
-            self.coin_pos[i] = prng.np_random.randint(self.grid_size, size=(2))
-            success  = 1 - self._same_pos(self.red_pos[i],
+            self.coin_pos[i] = self.np_random.randint(self.grid_size, size=(2))
+            success = 1 - self._same_pos(self.red_pos[i],
                                           self.coin_pos[i])
             success += 1 - self._same_pos(self.blue_pos[i],
                                           self.coin_pos[i])
@@ -100,6 +110,7 @@ class CoinGameVec(gym.Env):
         # Compute rewards
         reward_red = np.zeros(self.batch_size)
         reward_blue = np.zeros(self.batch_size)
+        generate_count= 0
         for i in range(self.batch_size):
             generate = False
             if self.red_coin[i]:
@@ -118,14 +129,20 @@ class CoinGameVec(gym.Env):
                 if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_blue[i] += 1
-
             if generate:
                 self._generate_coin(i)
+                generate_count += 1
 
+        generate_rate = generate_count/self.batch_size
+        self.gene_rate_avg.append(generate_rate)
+        if len(self.gene_rate_avg) == 100:
+            print("self.gene_rate_avg", sum(self.gene_rate_avg)/100)
+            self.gene_rate_avg.clear()
         reward = [reward_red, reward_blue]
-        state = self._generate_state().reshape((self.batch_size, -1))
+        # state = self._generate_state().reshape((self.batch_size, -1))
+        state = self._generate_state() #.reshape((self.batch_size, -1))
         observations = [state, state]
         done = (self.step_count == self.max_steps)
-        info = [{'available_actions': aa} for aa in self.available_actions]
-
+        info = { "available_actions":[{'available_actions': aa} for aa in self.available_actions],
+                 "generate_rate":generate_rate}
         return observations, reward, done, info

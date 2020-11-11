@@ -34,7 +34,8 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
 
     agent_list = np.arange(total_n_agents)
     for agent in range(total_n_agents):
-        mainQN.append(Qnetwork('main' + str(agent), agent, env, lr=lr, gamma=gamma, batch_size=batch_size, trace_length=trace_length, hidden=hidden, simple_net=simple_net))
+        mainQN.append(Qnetwork('main' + str(agent), agent, env, lr=lr, gamma=gamma, batch_size=batch_size,
+                               trace_length=trace_length, hidden=hidden, simple_net=simple_net))
 
     if not mem_efficient:
         cube, cube_ops = make_cube(trace_length)
@@ -115,6 +116,8 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                 episodes_run_counter[agent] += 1
             a_all_old = [0,0]
 
+            # Rollout the episode
+            # ac with mainQN[agent].predict andenv.step
             # The Q-Network
             while j < max_epLength:
                 j += 1
@@ -159,8 +162,11 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
             rList.append(rAll)
             aList.append(aAll)
 
+            # training every batch_size episodes
             if (episodes_run[agent] % batch_size == 0 and
                 episodes_run[agent] > 0):
+
+                # Sample from data buffer
                 trainBatch0 = buffers[0].sample(batch_size, trace_length) #Get a random batch of experiences.
                 trainBatch1 = buffers[1].sample(batch_size, trace_length)
 
@@ -171,6 +177,8 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                 sample_reward1 = np.reshape(trainBatch1[:,2] - np.mean(trainBatch1[:,2]), [-1, trace_length]) * discount
 
                 last_state = np.reshape(np.vstack(trainBatch0[:,3]), [-1, trace_length, env.NUM_STATES])[:,-1,:]
+
+
 
                 value_0_next, value_1_next = sess.run(
                     [mainQN[0].value, mainQN[1].value],
@@ -206,9 +214,11 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                     mainQN[0].gamma_array_inverse: discount_array,
                     mainQN[1].gamma_array_inverse: discount_array,
                 }
+                # Condition not needed?
                 if episodes_run[agent]  %  batch_size == 0 and  episodes_run[agent] > 0:
                     values, _, _, update1, update2, grad_1, grad_2, v0_grad_01, v1_grad_10 = sess.run(fetches, feed_dict=feed_dict)
 
+                # Condition not needed?
                 if episodes_run[agent]  %  batch_size == 0  and  episodes_run[agent] > 0:
                     update(mainQN, lr, update1, update2)
                     updated =True
@@ -222,6 +232,7 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                 episodes_actions[agent] = episodes_actions[agent]*0
                 episodes_reward[agent] =episodes_reward[agent] *0
 
+            # Log info every summaryLength episodes
             if len(rList) % summaryLength == 0 and len(rList) != 0 and updated == True:
                 updated = False
                 gamma_discount = 1 / (1-gamma)

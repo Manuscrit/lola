@@ -19,7 +19,7 @@ def stop_forward(x):
 
 def build_policy(env, make_policy, scope, reuse=None, prev=None):
     """Creates and builds a new policy."""
-    pi = make_policy(env.NUM_STATES, env.NUM_ACTIONS, prev=prev)
+    pi = make_policy(env.ob_space_shape, env.NUM_ACTIONS, prev=prev)
     pi.build(scope, reuse=reuse)
     return pi
 
@@ -221,6 +221,7 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
         trace: A list of obs, acs, rets, values, infos.
     """
     obs, acs, rets, rews, values, infos = [], [], [], [], [], []
+    generate_rate = []
 
     # Construct the parent feed list.
     parent_policies = zip(*[pi.parents for pi in policies])
@@ -241,9 +242,11 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
     ob, info = env.reset()
     done = False
     gamma_t = 1.
-
     while not done:
         obs.append(ob)
+        if "generate_rate" in info:
+            generate_rate.append(info["generate_rate"])
+        info = info["available_actions"]
         infos.append(info)
 
         ac = [
@@ -273,7 +276,7 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
     infos = list(map(np.asarray, zip(*infos)))
     trace = list(zip(obs, acs, rets, values, infos))
 
-    return trace
+    return trace, generate_rate
 
 
 def gen_trace_batches(trace, *, batch_size):
@@ -452,6 +455,7 @@ def train(env, make_policy, make_optimizer, *,
     params_all = []
     params_om_all = []
     times_all = []
+    pick_speed_all = []
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -491,7 +495,7 @@ def train(env, make_policy, make_optimizer, *,
                     # Fit opponent models for several epochs.
                     om_losses = np.zeros((n_agents, n_agents - 1))
                     for om_ep in range(om_epochs):
-                        traces = rollout(
+                        traces, _ = rollout(
                             env, root_policies, rollout_policies, sess,
                             gamma=gamma, parent_traces=[])
                         om_traces = [
@@ -514,7 +518,7 @@ def train(env, make_policy, make_optimizer, *,
                 # Fit value functions for several epochs.
                 value_losses = np.zeros(n_agents)
                 for v_ep in range(value_epochs):
-                    traces = rollout(
+                    traces, _ = rollout(
                         env, root_policies, rollout_policies, sess,
                         gamma=gamma, parent_traces=[])
                     for k in range(n_agents):
@@ -542,6 +546,7 @@ def train(env, make_policy, make_optimizer, *,
             params_om_all.append(params)
 
             # Inner loop rollouts (lookahead steps).
+            generate_rate_trace = []
             with U.elapsed_timer() as inner_timer:
                 inner_traces = []
                 for k in range(n_agents):
@@ -549,11 +554,12 @@ def train(env, make_policy, make_optimizer, *,
                     for m in range(n_inner_steps):
                         policies_k = [policies[k].parents[m]] + [
                             opp.parents[m] for opp in policies[k].opponents]
-                        traces = rollout(
+                        traces, generate_rate = rollout(
                             env, policies_k, rollout_policies, sess,
                             gamma=gamma, parent_traces=parent_traces)
                         parent_traces.append(traces)
                     inner_traces.append(parent_traces)
+                    generate_rate_trace.append(generate_rate)
             times.append(inner_timer())
 
             # Outer loop rollouts (each agent plays against updated opponents).
@@ -562,7 +568,7 @@ def train(env, make_policy, make_optimizer, *,
                 for k in range(n_agents):
                     parent_traces = inner_traces[k]
                     policies_k = [policies[k]] + policies[k].opponents
-                    traces = rollout(
+                    traces, _ = rollout(
                         env, policies_k, rollout_policies, sess,
                         gamma=gamma, parent_traces=parent_traces)
                     outer_traces.append(traces)
@@ -584,10 +590,14 @@ def train(env, make_policy, make_optimizer, *,
             # Logging.
             if n_inner_steps > 0:
                 obs, acs, rets, vals, infos = list(zip(*inner_traces[0][0]))
+                generate_rate_trace = generate_rate_trace[0]
             else:
                 obs, acs, rets, vals, infos = list(zip(*outer_traces[0]))
             times_all.append(times)
             acs_all.append([ac.mean() for ac in acs])
+
+            pick_speed_all.append(sum(generate_rate_trace)/len(generate_rate_trace)
+                                   if len(generate_rate_trace) > 0 else -1)
 
             rets_all.append([r.sum(axis=0).mean() * (1 - gamma) for r in rets])
             # rets_all.append([r.sum(axis=0).mean() for r in rets])
@@ -597,6 +607,7 @@ def train(env, make_policy, make_optimizer, *,
             print("OM losses:", om_losses.tolist())
             print("Returns:", rets_all[-1])
             print("Defection rate:", acs_all[-1])
+            print("Pick speed:", pick_speed_all[-1])
 
             # Save stuff
             np.save(save_dir + '/acs.npy', acs_all)
@@ -604,3 +615,4 @@ def train(env, make_policy, make_optimizer, *,
             np.save(save_dir + '/params.npy', params_all)
             np.save(save_dir + '/params_om.npy', params_om_all)
             np.save(save_dir + '/times.npy', times_all)
+            np.save(save_dir + '/pick_speed.npy', pick_speed_all)

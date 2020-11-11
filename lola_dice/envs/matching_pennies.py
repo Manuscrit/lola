@@ -18,6 +18,7 @@ class IteratedMatchingPennies(gym.Env):
     NUM_STATES = 5
 
     def __init__(self, max_steps, batch_size=1):
+        self.ob_space_shape = [self.NUM_STATES]
         self.max_steps = max_steps
         self.batch_size = batch_size
         self.payout_mat = np.array([[1, -1],[-1, 1]])
@@ -40,6 +41,7 @@ class IteratedMatchingPennies(gym.Env):
         init_state[:, -1] = 1
         observations = [init_state, init_state]
         info = [{'available_actions': aa} for aa in self.available_actions]
+        info = { "available_actions":info}
         return observations, info
 
     def step(self, action):
@@ -59,5 +61,6 @@ class IteratedMatchingPennies(gym.Env):
 
         done = (self.step_count == self.max_steps)
         info = [{'available_actions': aa} for aa in self.available_actions]
+        info = { "available_actions":info}
 
         return observations, rewards, done, info
