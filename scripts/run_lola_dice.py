@@ -80,9 +80,11 @@ def main(use_dice, use_opp_modeling, epochs, batch_size, runs, exp_name, trace_l
         env = CG(trace_length, batch_size, grid_size)
         gamma = 0.96 if gamma is None else gamma
         policy_maker = make_conv_policy
-        env.seed(SEED)
-    # elif exp_name == "AssymCoinGame":
-    #     env = AssymCG(trace_length, batch_size, grid_size)
+        # env.seed(SEED)
+        timestamp = datetime.now().timestamp()
+        env.seed(int(timestamp))
+    # elif exp_name == "AsymCoinGame":
+    #     env = AsymCG(trace_length, batch_size, grid_size)
     #     gamma = 0.96 if gamma is None else gamma
 
     else:
@@ -99,11 +101,11 @@ def main(use_dice, use_opp_modeling, epochs, batch_size, runs, exp_name, trace_l
               lr_outer=base_lr*.2,
               lr_value=base_lr*.1,
               lr_om=base_lr*.1,
-              inner_asymm=True,
+              inner_asymm=True,  # (official is True),
               n_agents=n_agents,
-              n_inner_steps=2,
+              n_inner_steps=2,  # (official is 2),
               value_batch_size=16,
-              value_epochs=0,
+              value_epochs=0,  # (official is 0),
               om_batch_size=16,
               om_epochs=0,
               use_baseline=False,
@@ -112,6 +114,6 @@ def main(use_dice, use_opp_modeling, epochs, batch_size, runs, exp_name, trace_l
               save_dir=f'{save_dir}/{start_time_str}/run-{r + 1}')
 
 
-SEED = 2020
+# SEED = 2020
 if __name__ == '__main__':
     main()

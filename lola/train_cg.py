@@ -31,7 +31,7 @@ def clone_update(mainPN_clone):
 
 def train(env, *, num_episodes, trace_length, batch_size,
           corrections, opp_model, grid_size, gamma, hidden, bs_mul, lr,
-          mem_efficient=True):
+          mem_efficient=True, asymmetry=False):
     #Setting the training parameters
     batch_size = batch_size #How many experience traces to use for each training step.
     trace_length = trace_length #How long each experience trace will be when training
@@ -136,7 +136,7 @@ def train(env, *, num_episodes, trace_length, batch_size,
             trainBatch0 = [[], [], [], [], [], []]
             trainBatch1 = [[], [], [], [], [], []]
             d = False
-            rAll = np.zeros((7))
+            rAll = np.zeros((8))
             aAll = np.zeros((env.NUM_ACTIONS * 2))
             j = 0
 
@@ -199,21 +199,58 @@ def train(env, *, num_episodes, trace_length, batch_size,
                     #         rAll[2] += 1
                     #     elif r_pb[0] == -2 and r_pb[1] == 1:
                     #         rAll[3] += 1
-                    if np.array(r_pb).any():
-                        if r_pb[0] > 0 and r_pb[1] == 0:
-                            rAll[0] += 1
-                        elif r_pb[0] == 0 and r_pb[1] > 0:
-                            rAll[1] += 1
-                        elif r_pb[0] > 0 and r_pb[1] < -1:
-                            rAll[2] += 1
-                        elif r_pb[0] < -1 and r_pb[1] > 0:
-                            rAll[3] += 1
-                        elif r_pb[0] > 0 and r_pb[1] < 0:
-                            rAll[4] += 1
-                        elif r_pb[0] < 0 and r_pb[1] > 0:
-                            rAll[5] += 1
-                        rAll[6] += r_pb[0]
-                        rAll[6] += r_pb[1]
+                    if not asymmetry:
+                        if np.array(r_pb).any():
+                            # player 1 pick coin 1
+                            if r_pb[0] == 1 and r_pb[1] == 0:
+                                rAll[0] += 1
+                            # player 2 pick coin 2
+                            elif r_pb[0] == 0 and r_pb[1] == 1:
+                                rAll[1] += 1
+                            # player 1 pick coin 2
+                            elif r_pb[0] == 1 and r_pb[1] == -2:
+                                rAll[2] += 1
+                            # player 2 pick coin 1
+                            elif r_pb[0] == -2 and r_pb[1] == 1:
+                                rAll[3] += 1
+                            # player 1 pick coin 2 and player 2 pick coin 2
+                            elif r_pb[0] == 1 and r_pb[1] == -1:
+                                rAll[4] += 1
+                            # player 1 pick coin 1 and player 2 pick coin 1
+                            elif r_pb[0] == -1 and r_pb[1] == 1:
+                                rAll[5] += 1
+                            else:
+                                raise ValueError(f"r_pb_{r_pb}")
+                            # Total reward for both agents
+                            rAll[6] += r_pb[0] + r_pb[1]
+                            # Count n steps in env
+                            rAll[7] += 1
+                    else:
+                        if np.array(r_pb).any():
+                            # player 1 pick coin 1
+                            if r_pb[0] == 2 and r_pb[1] == 0:
+                                rAll[0] += 1
+                            # player 2 pick coin 2
+                            elif r_pb[0] == 0 and r_pb[1] == 1:
+                                rAll[1] += 1
+                            # player 1 pick coin 2
+                            elif r_pb[0] == 1 and r_pb[1] == -2:
+                                rAll[2] += 1
+                            # player 2 pick coin 1
+                            elif r_pb[0] == -1 and r_pb[1] == 1:
+                                rAll[3] += 1
+                            # player 1 pick coin 2 and player 2 pick coin 2
+                            elif r_pb[0] == 1 and r_pb[1] == -1:
+                                rAll[4] += 1
+                            # player 1 pick coin 1 and player 2 pick coin 1
+                            elif r_pb[0] == 1 and r_pb[1] == 1:
+                                rAll[5] += 1
+                            else:
+                                raise ValueError(f"r_pb_{r_pb}")
+                            # Total reward for both agents
+                            rAll[6] += r_pb[0] + r_pb[1]
+                            # Count n steps in env
+                            rAll[7] += 1
 
                 aAll[a_all[0]] += 1
                 aAll[a_all[1] + 4] += 1

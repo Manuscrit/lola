@@ -38,7 +38,13 @@ class CoinGameVec(gym.Env):
 
         self.step_count = None
         self.np_random = None
-        self.gene_rate_avg = deque(maxlen=100)
+        self.coin_pick_speed = deque(maxlen=self.max_steps)
+        self.rewards_red = deque(maxlen=self.max_steps)
+        self.rewards_blue = deque(maxlen=self.max_steps)
+        self.blue_coop = deque(maxlen=self.max_steps)
+        self.red_coop = deque(maxlen=self.max_steps)
+        self.blue_picked = deque(maxlen=self.max_steps)
+        self.red_picked = deque(maxlen=self.max_steps)
 
     def seed(self, seed=None):
         """Seed the PRNG of this space. """
@@ -111,38 +117,69 @@ class CoinGameVec(gym.Env):
         reward_red = np.zeros(self.batch_size)
         reward_blue = np.zeros(self.batch_size)
         generate_count= 0
+        coop_blue = 0
+        coop_red = 0
+        defect_red = 0
+        defect_blue = 0
         for i in range(self.batch_size):
             generate = False
             if self.red_coin[i]:
                 if self._same_pos(self.red_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_red[i] += 1
+                    coop_red += 1
                 if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_red[i] += -2
                     reward_blue[i] += 1
+                    defect_blue += 1
             else:
                 if self._same_pos(self.red_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_red[i] += 1
                     reward_blue[i] += -2
+                    defect_red += 1
                 if self._same_pos(self.blue_pos[i], self.coin_pos[i]):
                     generate = True
                     reward_blue[i] += 1
+                    coop_blue += 1
             if generate:
                 self._generate_coin(i)
                 generate_count += 1
 
-        generate_rate = generate_count/self.batch_size
-        self.gene_rate_avg.append(generate_rate)
-        if len(self.gene_rate_avg) == 100:
-            print("self.gene_rate_avg", sum(self.gene_rate_avg)/100)
-            self.gene_rate_avg.clear()
+        # Print stuff
+        self.blue_picked.append(coop_blue + defect_blue)
+        self.blue_coop.append(coop_blue)
+        self.red_picked.append(coop_red + defect_red)
+        self.red_coop.append(coop_red)
+        self.rewards_red.append(sum(reward_red) / len(reward_red))
+        self.rewards_blue.append(sum(reward_blue) / len(reward_blue))
+        coin_pick_rate = generate_count/self.batch_size
+        self.coin_pick_speed.append(coin_pick_rate)
+        if len(self.coin_pick_speed) == self.max_steps:
+            print("coin_pick_speed", sum(self.coin_pick_speed) / self.max_steps)
+            self.coin_pick_speed.clear()
+            print("rewards_per_players",
+                  sum(self.rewards_red) / self.max_steps,
+                  sum(self.rewards_blue) / self.max_steps)
+            self.rewards_red.clear()
+            self.rewards_blue.clear()
+            sum_red = sum(self.red_picked)
+            sum_blue = sum(self.blue_picked)
+            if sum_red > 0 and sum_blue > 0:
+                print("cooperative",
+                      sum(self.red_coop) / sum_red,
+                      sum(self.blue_coop) / sum_blue)
+            self.red_coop.clear()
+            self.blue_coop.clear()
+            self.red_picked.clear()
+            self.blue_picked.clear()
+
         reward = [reward_red, reward_blue]
         # state = self._generate_state().reshape((self.batch_size, -1))
         state = self._generate_state() #.reshape((self.batch_size, -1))
         observations = [state, state]
         done = (self.step_count == self.max_steps)
         info = { "available_actions":[{'available_actions': aa} for aa in self.available_actions],
-                 "generate_rate":generate_rate}
+                 "generate_rate":coin_pick_rate}
         return observations, reward, done, info

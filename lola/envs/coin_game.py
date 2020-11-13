@@ -142,6 +142,7 @@ class AsymCoinGameVec(CoinGameVec):
             generate = False
             reward_red.append(0)
             reward_blue.append(0)
+            # TODO change the effect of asymmetry into a condition like when red coin picked do +1 for red
             if self.red_coin[i]:
                 if self._same_pos(self.red_pos[i], self.coin_pos[i]):
                     generate = True

@@ -4,7 +4,7 @@ from .prisoners_dilemma import IteratedPrisonersDilemma
 
 
 # Aliases
-AssymCG = AsymCoinGameVec
+AsymCG = AsymCoinGameVec
 CG = CoinGameVec
 IMP = IteratedMatchingPennies
 IPD = IteratedPrisonersDilemma

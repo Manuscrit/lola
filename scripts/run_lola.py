@@ -2,6 +2,7 @@
 
 import click
 import time
+from datetime import datetime
 
 from lola import logger
 
@@ -57,7 +58,7 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
          trials, lr, lr_correction, batch_size, bs_mul, simple_net, hidden,
          num_units, reg, gamma, lola, opp_model, mem_efficient):
     # Sanity
-    assert exp_name in {"CoinGame", "IPD", "IMP"}
+    assert exp_name in {"CoinGame", "IPD", "IMP", "AsymCoinGame"}
 
     # Resolve default parameters
     if exact:
@@ -69,7 +70,7 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
         trace_length = 150 if trace_length is None else trace_length
         batch_size = 4000 if batch_size is None else batch_size
         lr = 1. if lr is None else lr
-    elif exp_name == "CoinGame":
+    elif exp_name == "CoinGame" or exp_name == "AsymCoinGame":
         num_episodes = 100000 if num_episodes is None else num_episodes
         trace_length = 150 if trace_length is None else trace_length
         batch_size = 4000 if batch_size is None else batch_size
@@ -78,6 +79,7 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
     # Import the right training function
     if exact:
         assert exp_name != "CoinGame", "Can't run CoinGame with --exact."
+        assert exp_name != "AsymCoinGame", "Can't run AsymCoinGame with --exact."
         def run(env):
             from lola.train_exact import train
             train(env,
@@ -120,6 +122,22 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
                   opp_model=opp_model,
                   hidden=hidden,
                   mem_efficient=mem_efficient)
+    elif exp_name == "AsymCoinGame":
+        def run(env):
+            from lola.train_cg import train
+            train(env,
+                  num_episodes=num_episodes,
+                  trace_length=trace_length,
+                  batch_size=batch_size,
+                  bs_mul=bs_mul,
+                  gamma=gamma,
+                  grid_size=grid_size,
+                  lr=lr,
+                  corrections=lola,
+                  opp_model=opp_model,
+                  hidden=hidden,
+                  mem_efficient=mem_efficient,
+                  asymmetry=True)
 
     # Instantiate the environment
     if exp_name == "IPD":
@@ -131,16 +149,19 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
     elif exp_name == "CoinGame":
         env = CG(trace_length, batch_size, grid_size)
         gamma = 0.96 if gamma is None else gamma
-    elif exp_name == "AssymCoinGame":
-        env = AssymCG(trace_length, batch_size, grid_size)
+    elif exp_name == "AsymCoinGame":
+        env = AsymCG(trace_length, batch_size, grid_size)
         gamma = 0.96 if gamma is None else gamma
 
     # Run training
+    start_time_str = datetime.now().strftime("%m_%d_%Y__%H_%M_%S")
     for seed in range(trials):
         logger.reset()
-        logger.configure(dir='logs/{}/seed-{}'.format(exp_name, seed))
+        logger.configure(dir=f'logs/{exp_name}/{start_time_str}_bs_{batch_size}_trace_len_'
+                             f'{trace_length}_opp_model_{opp_model}_lr_{lr}_simple_net_{simple_net}/seed'
+                             f'-{seed}')
         start_time = time.time()
-        if exp_name == "CoinGame":
+        if exp_name == "CoinGame" or exp_name == "AsymCoinGame":
             env.seed(seed)
         run(env)
         end_time  = time.time()

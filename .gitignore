@@ -107,3 +107,9 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+
+
+scripts/logs/
+scripts/dice_results*
+scripts/to_plot_logs/

@@ -199,7 +199,7 @@ def compute_values(rews, last_vpreds, *, gamma, use_gae=False):
 
 
 def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
-    """Rolls out a single episode of the policies in the given environment.
+    """Rolls out a single batch of episode of the policies in the given environment.
 
     To avoid quadratic time complexity of the rollout in the number time steps
     for the recursively generated policies, we never use their graphs directly
@@ -349,7 +349,7 @@ def build_graph(env, make_policy, make_optimizer, *,
                 "inner_%d/params_%d" % (m + 1, k),
                 [policies[k]] + policies[k].opponents, 0,
                 lr=lr_inner,
-                asymm=True,
+                asymm=inner_asymm,
                 use_baseline=use_baseline,
                 use_dice=use_dice)
             # Build new policy and opponents.
@@ -447,7 +447,7 @@ def train(env, make_policy, make_optimizer, *,
         lr_inner=lr_inner, lr_outer=lr_outer, lr_value=lr_value, lr_om=lr_om,
         n_agents=n_agents, n_inner_steps=n_inner_steps,
         use_baseline=use_baseline, use_dice=use_dice,
-        use_opp_modeling=use_opp_modeling)
+        use_opp_modeling=use_opp_modeling, inner_asymm=inner_asymm)
 
     # Train.
     acs_all = []
@@ -513,6 +513,7 @@ def train(env, make_policy, make_optimizer, *,
             else:
                 om_losses = np.array([])
 
+            print("start Fit function")
             # Fit value functions.
             with U.elapsed_timer() as val_timer:
                 # Fit value functions for several epochs.
@@ -544,7 +545,7 @@ def train(env, make_policy, make_optimizer, *,
                     for opp in pi.opponents])
                 for pi in policies]
             params_om_all.append(params)
-
+            print("start Inner loops")
             # Inner loop rollouts (lookahead steps).
             generate_rate_trace = []
             with U.elapsed_timer() as inner_timer:
@@ -561,7 +562,7 @@ def train(env, make_policy, make_optimizer, *,
                     inner_traces.append(parent_traces)
                     generate_rate_trace.append(generate_rate)
             times.append(inner_timer())
-
+            print("start Outer loops")
             # Outer loop rollouts (each agent plays against updated opponents).
             with U.elapsed_timer() as outer_timer:
                 outer_traces = []
