@@ -4,6 +4,7 @@ Training funcion for the Coin Game.
 import os
 import numpy as np
 import tensorflow as tf
+from ray import tune
 
 from . import logger
 
@@ -393,3 +394,27 @@ def train(env, *, num_episodes, trace_length, batch_size,
                     logger.record_tabular('rList['+str(ii)+']', rlog[ii])
                 logger.dump_tabular()
                 logger.info('')
+
+
+                to_plot = {}
+                for ii in range(len(rlog)):
+                    if ii == 0:
+                        to_plot['red_pick_red'] = rlog[ii]
+                    elif ii == 1:
+                        to_plot['blue_pick_blue'] = rlog[ii]
+
+                    elif ii == 2:
+                        to_plot['red_pick_blue'] = rlog[ii]
+                    elif ii == 3:
+                        to_plot['blue_pick_red'] = rlog[ii]
+
+                    elif ii == 4:
+                        to_plot['both_pick_blue'] = rlog[ii]
+                    elif ii == 5:
+                        to_plot['both_pick_red'] = rlog[ii]
+
+                    elif ii == 6:
+                        to_plot['total_reward'] = rlog[ii]
+                    elif ii == 7:
+                        to_plot['n_steps_per_batch'] = rlog[ii]
+                tune.report(**to_plot)
