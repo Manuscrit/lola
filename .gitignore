@@ -113,3 +113,5 @@ ENV/
 scripts/logs/
 scripts/dice_results*
 scripts/to_plot_logs/
+notebooks/dice/custom_results*
+1709.04326*
