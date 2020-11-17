@@ -4,6 +4,8 @@ PG training for the Iterated Prisoner's Dilemma and Matching Pennies.
 import numpy as np
 import tensorflow as tf
 
+from ray import tune
+
 from . import logger
 
 from .corrections import *
@@ -285,3 +287,5 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                     logger.record_tabular(key, log_items[key])
                 logger.dump_tabular()
                 logger.info('')
+
+                tune.report(**log_items)

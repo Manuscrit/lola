@@ -6,7 +6,7 @@ import numpy as np
 import tensorflow as tf
 from ray import tune
 
-from . import logger
+# from . import logger
 
 from .corrections import *
 from .networks import *
@@ -130,8 +130,13 @@ def train(env, *, num_episodes, trace_length, batch_size,
             else:
                 these_agents = sorted(agent_list[0:n_agents])
 
+            # using coin game from lola.envs
             #Reset environment and get first new observation
             sP = env.reset()
+            # using coin game from lola_dice.envs
+            obs, _ = env.reset()
+            sP = obs[0]
+
             s = sP
 
             trainBatch0 = [[], [], [], [], [], []]
@@ -140,6 +145,7 @@ def train(env, *, num_episodes, trace_length, batch_size,
             rAll = np.zeros((8))
             aAll = np.zeros((env.NUM_ACTIONS * 2))
             j = 0
+            last_info = {}
 
             lstm_state = []
             for agent in these_agents:
@@ -171,9 +177,17 @@ def train(env, *, num_episodes, trace_length, batch_size,
                 trainBatch0[1].append(a_all[0])
                 trainBatch1[1].append(a_all[1])
 
+                # using coin game from lola.envs
+                # a_all = np.transpose(np.vstack(a_all))
+                # s1P,r,d = env.step(actions=a_all)
+                # using coin game from lola_dice.envs
+                obs, r, d, info = env.step(a_all)
+                d = np.array([d for _ in range(batch_size)])
+                s1P = obs[0]
+                last_info.update(info)
                 a_all = np.transpose(np.vstack(a_all))
+                # print("s1P,r,d", s1P,r,d)
 
-                s1P,r,d = env.step(actions=a_all)
                 s1 = s1P
 
                 trainBatch0[2].append(r[0])
@@ -222,10 +236,10 @@ def train(env, *, num_episodes, trace_length, batch_size,
                                 rAll[5] += 1
                             else:
                                 raise ValueError(f"r_pb_{r_pb}")
-                            # Total reward for both agents
-                            rAll[6] += r_pb[0] + r_pb[1]
-                            # Count n steps in env
-                            rAll[7] += 1
+                        # Total reward for both agents
+                        rAll[6] += r_pb[0] + r_pb[1]
+                        # Count n steps in env
+                        rAll[7] += 1
                     else:
                         if np.array(r_pb).any():
                             # player 1 pick coin 1
@@ -248,13 +262,17 @@ def train(env, *, num_episodes, trace_length, batch_size,
                                 rAll[5] += 1
                             else:
                                 raise ValueError(f"r_pb_{r_pb}")
-                            # Total reward for both agents
-                            rAll[6] += r_pb[0] + r_pb[1]
-                            # Count n steps in env
-                            rAll[7] += 1
+                        # Total reward for both agents
+                        rAll[6] += r_pb[0] + r_pb[1]
+                        # Count n steps in env
+                        rAll[7] += 1
 
-                aAll[a_all[0]] += 1
-                aAll[a_all[1] + 4] += 1
+                    aAll[a_all[index, 0]] += 1
+                    aAll[a_all[index, 1] + 4] += 1
+
+                # aAll[a_all[0]] += 1
+                # aAll[a_all[1] + 4] += 1
+
                 s_old = s
                 s = s1
                 sP = s1P
@@ -367,9 +385,10 @@ def train(env, *, num_episodes, trace_length, batch_size,
                     mainPN_clone[0].gamma_array: np.reshape(discount,[1,-1]),
                     mainPN_clone[1].gamma_array:  np.reshape(discount,[1,-1]),
                 })
-            values, _, _, update1, update2 = sess.run(
+            values, values_1, _, _, update1, update2 = sess.run(
                 [
                     mainPN[0].value,
+                    mainPN[1].value,
                     mainPN[0].updateModel,
                     mainPN[1].updateModel,
                     mainPN[0].delta,
@@ -390,11 +409,11 @@ def train(env, *, num_episodes, trace_length, batch_size,
                 print("n epi", i, "over", num_episodes, "total_steps", total_steps)
                 print('reward', np.sum(rList[-summary_len:], 0))
                 rlog = np.sum(rList[-summary_len:], 0)
-                for ii in range(len(rlog)):
-                    logger.record_tabular('rList['+str(ii)+']', rlog[ii])
-                logger.dump_tabular()
-                logger.info('')
 
+                # for ii in range(len(rlog)):
+                #     logger.record_tabular('rList['+str(ii)+']', rlog[ii])
+                # logger.dump_tabular()
+                # logger.info('')
 
                 to_plot = {}
                 for ii in range(len(rlog)):
@@ -416,5 +435,19 @@ def train(env, *, num_episodes, trace_length, batch_size,
                     elif ii == 6:
                         to_plot['total_reward'] = rlog[ii]
                     elif ii == 7:
-                        to_plot['n_steps_per_batch'] = rlog[ii]
-                tune.report(**to_plot)
+                        to_plot['n_steps_per_summary'] = rlog[ii]
+
+                action_log = np.sum(aList[-summary_len:], 0)
+                actions_freq = {f"player_red_act_{i}": action_log[i] / to_plot['n_steps_per_summary']
+                                for i in range(0, 4, 1)}
+                actions_freq.update({f"player_blue_act_{i - 4}": action_log[i] / to_plot['n_steps_per_summary']
+                                for i in range(4, 8, 1)})
+
+                last_info.pop("available_actions", None)
+
+                training_info = {
+                    "player_1_update": update1.sum(),
+                    "player_2_update": update2.sum(),
+                }
+
+                tune.report(**to_plot, **last_info, **training_info, **actions_freq)

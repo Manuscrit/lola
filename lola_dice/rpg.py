@@ -4,6 +4,7 @@ import os
 import sys
 import numpy as np
 import tensorflow as tf
+from ray import tune
 
 from . import utils as U
 from .envs import IPD, IMP
@@ -221,7 +222,7 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
         trace: A list of obs, acs, rets, values, infos.
     """
     obs, acs, rets, rews, values, infos = [], [], [], [], [], []
-    generate_rate = []
+    to_log = []
 
     # Construct the parent feed list.
     parent_policies = zip(*[pi.parents for pi in policies])
@@ -239,14 +240,12 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
 
     # Roll out
     t = 0
-    ob, info = env.reset()
+    ob, all_info = env.reset()
+    info = all_info.pop("available_actions")
     done = False
     gamma_t = 1.
     while not done:
         obs.append(ob)
-        if "generate_rate" in info:
-            generate_rate.append(info["generate_rate"])
-        info = info["available_actions"]
         infos.append(info)
 
         ac = [
@@ -254,12 +253,16 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
             for pi, o, i in zip(rollout_policies, ob, info)
         ]
 
-        ob, rew, done, info = env.step(ac)
+        ob, rew, done, all_info = env.step(ac)
         acs.append(ac)
         rews.append(rew)
         rets.append([r * gamma_t for r in rew])
         gamma_t *= gamma
         t += 1
+
+        info = all_info.pop("available_actions")
+        to_log.append(all_info)
+
 
     # Adjust rets and compute value estimates
     last_vpreds =  [
@@ -276,7 +279,7 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
     infos = list(map(np.asarray, zip(*infos)))
     trace = list(zip(obs, acs, rets, values, infos))
 
-    return trace, generate_rate
+    return trace, to_log
 
 
 def gen_trace_batches(trace, *, batch_size):
@@ -547,7 +550,7 @@ def train(env, make_policy, make_optimizer, *,
             params_om_all.append(params)
             print("start Inner loops")
             # Inner loop rollouts (lookahead steps).
-            generate_rate_trace = []
+            inner_all_to_log = []
             with U.elapsed_timer() as inner_timer:
                 inner_traces = []
                 for k in range(n_agents):
@@ -555,24 +558,26 @@ def train(env, make_policy, make_optimizer, *,
                     for m in range(n_inner_steps):
                         policies_k = [policies[k].parents[m]] + [
                             opp.parents[m] for opp in policies[k].opponents]
-                        traces, generate_rate = rollout(
+                        traces, to_log = rollout(
                             env, policies_k, rollout_policies, sess,
                             gamma=gamma, parent_traces=parent_traces)
                         parent_traces.append(traces)
                     inner_traces.append(parent_traces)
-                    generate_rate_trace.append(generate_rate)
+                    inner_all_to_log.append(to_log)
             times.append(inner_timer())
             print("start Outer loops")
             # Outer loop rollouts (each agent plays against updated opponents).
+            outer_all_to_log = []
             with U.elapsed_timer() as outer_timer:
                 outer_traces = []
                 for k in range(n_agents):
                     parent_traces = inner_traces[k]
                     policies_k = [policies[k]] + policies[k].opponents
-                    traces, _ = rollout(
+                    traces, to_log = rollout(
                         env, policies_k, rollout_policies, sess,
                         gamma=gamma, parent_traces=parent_traces)
                     outer_traces.append(traces)
+                    inner_all_to_log.append(to_log)
             times.append(outer_timer())
 
             # Updates.
@@ -591,12 +596,16 @@ def train(env, make_policy, make_optimizer, *,
             # Logging.
             if n_inner_steps > 0:
                 obs, acs, rets, vals, infos = list(zip(*inner_traces[0][0]))
-                generate_rate_trace = generate_rate_trace[0]
+                all_to_log = inner_all_to_log[0]
             else:
                 obs, acs, rets, vals, infos = list(zip(*outer_traces[0]))
+                all_to_log = outer_all_to_log
+
             times_all.append(times)
             acs_all.append([ac.mean() for ac in acs])
 
+            generate_rate_trace = [all_to_log[i].pop('generate_rate') for i in range(len(all_to_log))
+                                    if "generate_rate" in all_to_log[i].keys()]
             pick_speed_all.append(sum(generate_rate_trace)/len(generate_rate_trace)
                                    if len(generate_rate_trace) > 0 else -1)
 
@@ -610,10 +619,25 @@ def train(env, make_policy, make_optimizer, *,
             print("Defection rate:", acs_all[-1])
             print("Pick speed:", pick_speed_all[-1])
 
-            # Save stuff
-            np.save(save_dir + '/acs.npy', acs_all)
-            np.save(save_dir + '/rets.npy', rets_all)
-            np.save(save_dir + '/params.npy', params_all)
-            np.save(save_dir + '/params_om.npy', params_om_all)
-            np.save(save_dir + '/times.npy', times_all)
-            np.save(save_dir + '/pick_speed.npy', pick_speed_all)
+            # # Save stuff
+            # np.save(save_dir + '/acs.npy', acs_all)
+            # np.save(save_dir + '/rets.npy', rets_all)
+            # np.save(save_dir + '/params.npy', params_all)
+            # np.save(save_dir + '/params_om.npy', params_om_all)
+            # np.save(save_dir + '/times.npy', times_all)
+            # np.save(save_dir + '/pick_speed.npy', pick_speed_all)
+
+            info_from_env = {}
+            # Only keep the last info
+            for to_log in all_to_log:
+                info_from_env.update(to_log)
+
+            initial_info = {
+                "returns_player_1": rets_all[-1][0],
+                "returns_player_2": rets_all[-1][1],
+                "defection_rate_player_1": acs_all[-1][0],
+                "defection_rate_player_2": acs_all[-1][1],
+                "pick_speed_global": pick_speed_all[-1],
+            }
+
+            tune.report(**initial_info, **info_from_env)
