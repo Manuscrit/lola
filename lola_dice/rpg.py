@@ -548,6 +548,7 @@ def train(env, make_policy, make_optimizer, *,
                     for opp in pi.opponents])
                 for pi in policies]
             params_om_all.append(params)
+
             print("start Inner loops")
             # Inner loop rollouts (lookahead steps).
             inner_all_to_log = []
@@ -555,16 +556,19 @@ def train(env, make_policy, make_optimizer, *,
                 inner_traces = []
                 for k in range(n_agents):
                     parent_traces = []
+                    to_log = []
                     for m in range(n_inner_steps):
                         policies_k = [policies[k].parents[m]] + [
                             opp.parents[m] for opp in policies[k].opponents]
-                        traces, to_log = rollout(
+                        traces, sub_to_log = rollout(
                             env, policies_k, rollout_policies, sess,
                             gamma=gamma, parent_traces=parent_traces)
                         parent_traces.append(traces)
+                        to_log.append(sub_to_log)
                     inner_traces.append(parent_traces)
                     inner_all_to_log.append(to_log)
             times.append(inner_timer())
+
             print("start Outer loops")
             # Outer loop rollouts (each agent plays against updated opponents).
             outer_all_to_log = []
@@ -577,7 +581,7 @@ def train(env, make_policy, make_optimizer, *,
                         env, policies_k, rollout_policies, sess,
                         gamma=gamma, parent_traces=parent_traces)
                     outer_traces.append(traces)
-                    inner_all_to_log.append(to_log)
+                    outer_all_to_log.append([to_log])
             times.append(outer_timer())
 
             # Updates.
@@ -593,51 +597,62 @@ def train(env, make_policy, make_optimizer, *,
                     policy_losses.append(loss)
                 update_time += pol_upd_timer()
 
-            # Logging.
-            if n_inner_steps > 0:
-                obs, acs, rets, vals, infos = list(zip(*inner_traces[0][0]))
-                all_to_log = inner_all_to_log[0]
-            else:
-                obs, acs, rets, vals, infos = list(zip(*outer_traces[0]))
-                all_to_log = outer_all_to_log
 
-            times_all.append(times)
-            acs_all.append([ac.mean() for ac in acs])
+            to_report = {}
+            for ag_idx in range(n_agents):
+                print("== For ag_idx",ag_idx, "==")
+                # Logging.
+                if n_inner_steps > 0:
+                    obs, acs, rets, vals, infos = list(zip(*inner_traces[0][ag_idx]))
+                    all_to_log = inner_all_to_log
+                else:
+                    obs, acs, rets, vals, infos = list(zip(*outer_traces[ag_idx]))
+                    all_to_log = outer_all_to_log
+                all_to_log = [per_agent_to_log[0] for per_agent_to_log in all_to_log][ag_idx]
+                policy_loss = policy_losses[ag_idx]
 
-            generate_rate_trace = [all_to_log[i].pop('generate_rate') for i in range(len(all_to_log))
-                                    if "generate_rate" in all_to_log[i].keys()]
-            pick_speed_all.append(sum(generate_rate_trace)/len(generate_rate_trace)
-                                   if len(generate_rate_trace) > 0 else -1)
+                times_all.append(times)
+                acs_all.append([ac.mean() for ac in acs])
 
-            rets_all.append([r.sum(axis=0).mean() * (1 - gamma) for r in rets])
-            # rets_all.append([r.sum(axis=0).mean() for r in rets])
-            print("Epoch:", e + 1, '-' * 60)
-            # print("Policy losses:", list(map(sum, policy_losses)))
-            print("Value losses:", value_losses.tolist())
-            print("OM losses:", om_losses.tolist())
-            print("Returns:", rets_all[-1])
-            print("Defection rate:", acs_all[-1])
-            print("Pick speed:", pick_speed_all[-1])
+                generate_rate_trace = [all_to_log[i].pop('generate_rate') for i in range(len(all_to_log))
+                                        if "generate_rate" in all_to_log[i].keys()]
+                pick_speed_all.append(sum(generate_rate_trace)/len(generate_rate_trace)
+                                       if len(generate_rate_trace) > 0 else -1)
 
-            # # Save stuff
-            # np.save(save_dir + '/acs.npy', acs_all)
-            # np.save(save_dir + '/rets.npy', rets_all)
-            # np.save(save_dir + '/params.npy', params_all)
-            # np.save(save_dir + '/params_om.npy', params_om_all)
-            # np.save(save_dir + '/times.npy', times_all)
-            # np.save(save_dir + '/pick_speed.npy', pick_speed_all)
+                rets_all.append([r.sum(axis=0).mean() * (1 - gamma) for r in rets])
+                # rets_all.append([r.sum(axis=0).mean() for r in rets])
+                print("Epoch:", e + 1, '-' * 60)
+                # print("Policy losses:", list(map(sum, policy_losses)))
+                print("Value losses:", value_losses.tolist())
+                print("OM losses:", om_losses.tolist())
+                print("Returns:", rets_all[-1])
+                print("Defection rate:", acs_all[-1])
+                print("Pick speed:", pick_speed_all[-1])
 
-            info_from_env = {}
-            # Only keep the last info
-            for to_log in all_to_log:
-                info_from_env.update(to_log)
+                # # Save stuff
+                # np.save(save_dir + '/acs.npy', acs_all)
+                # np.save(save_dir + '/rets.npy', rets_all)
+                # np.save(save_dir + '/params.npy', params_all)
+                # np.save(save_dir + '/params_om.npy', params_om_all)
+                # np.save(save_dir + '/times.npy', times_all)
+                # np.save(save_dir + '/pick_speed.npy', pick_speed_all)
 
-            initial_info = {
-                "returns_player_1": rets_all[-1][0],
-                "returns_player_2": rets_all[-1][1],
-                "defection_rate_player_1": acs_all[-1][0],
-                "defection_rate_player_2": acs_all[-1][1],
-                "pick_speed_global": pick_speed_all[-1],
-            }
+                info_from_env = {}
+                # Only keep the last info
+                for to_log in all_to_log:
+                    info_from_env.update(to_log)
 
-            tune.report(**initial_info, **info_from_env)
+                initial_info = {
+                    "returns_player_1": rets_all[-1][0],
+                    "returns_player_2": rets_all[-1][1],
+                    "defection_rate_player_1": acs_all[-1][0],
+                    "defection_rate_player_2": acs_all[-1][1],
+                    "pick_speed_global": pick_speed_all[-1],
+                    "policy_loss": policy_loss,
+                }
+                for k, v in info_from_env.items():
+                    to_report[f"ag_{ag_idx}_{k}"] = v
+                for k, v in initial_info.items():
+                    to_report[f"ag_{ag_idx}_{k}"] = v
+
+            tune.report(**to_report)

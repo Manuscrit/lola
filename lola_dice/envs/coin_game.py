@@ -53,6 +53,14 @@ class CoinGameVec(gym.Env):
 
     def reset(self):
         self.step_count = 0
+        self.player_red_picked_own.clear()
+        self.player_blue_picked_own.clear()
+        self.player_red_picked.clear()
+        self.player_blue_picked.clear()
+        self.coin_pick_speed.clear()
+        self.rewards_red.clear()
+        self.rewards_blue.clear()
+
         self.red_coin = self.np_random.randint(2, size=self.batch_size)
         # Agent and coin positions
         self.red_pos  = self.np_random.randint(
@@ -165,20 +173,18 @@ class CoinGameVec(gym.Env):
         self.coin_pick_speed.append(coin_pick_rate)
 
         info = {}
-        if len(self.coin_pick_speed) == self.max_steps:
+        if (self.step_count == self.max_steps):
             coin_pick_speed = sum(self.coin_pick_speed) / self.max_steps
             print("pick_speed", coin_pick_speed)
             info["pick_speed"] = coin_pick_speed
 
-            self.coin_pick_speed.clear()
             rewards_per_player = (sum(self.rewards_red) / self.max_steps,
                   sum(self.rewards_blue) / self.max_steps)
             print("rewards_per_player",rewards_per_player)
             info["rewards_red"] = rewards_per_player[0]
             info["rewards_blue"] = rewards_per_player[1]
 
-            self.rewards_red.clear()
-            self.rewards_blue.clear()
+
             sum_red = sum(self.player_red_picked)
             sum_blue = sum(self.player_blue_picked)
             if sum_red > 0 and sum_blue > 0:
@@ -193,12 +199,6 @@ class CoinGameVec(gym.Env):
             print("speed_per_player",speed_per_player)
             info["pick_speed_red"] = speed_per_player[0]
             info["pick_speed_blue"] = speed_per_player[1]
-
-            self.player_red_picked_own.clear()
-            self.player_blue_picked_own.clear()
-            self.player_red_picked.clear()
-            self.player_blue_picked.clear()
-
 
         reward = [reward_red, reward_blue]
 

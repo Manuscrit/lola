@@ -32,7 +32,11 @@ def clone_update(mainPN_clone):
 
 def train(env, *, num_episodes, trace_length, batch_size,
           corrections, opp_model, grid_size, gamma, hidden, bs_mul, lr,
-          mem_efficient=True, asymmetry=False):
+          mem_efficient=True, asymmetry=False, warmup=False,
+          changed_config= False, ac_lr=1.0, summary_len=20, use_MAE=False,
+          perform_lola_update=True, use_toolbox_env=False,
+          clip_lola_update_norm=False, clip_loss_norm=False,
+          entropy_coeff=1.0, weigth_decay=0.01):
     #Setting the training parameters
     batch_size = batch_size #How many experience traces to use for each training step.
     trace_length = trace_length #How long each experience trace will be when training
@@ -45,20 +49,32 @@ def train(env, *, num_episodes, trace_length, batch_size,
     total_n_agents = n_agents
     h_size = [hidden] * total_n_agents
     max_epLength = trace_length+1 #The max allowed length of our episode.
-    summary_len = 20 #Number of episodes to periodically save for analysis
+    # summary_len = 20 #Number of episodes to periodically save for analysis
 
     tf.reset_default_graph()
     mainPN = []
     mainPN_step = []
     agent_list = np.arange(total_n_agents)
     for agent in range(total_n_agents):
+        print("mainPN")
         mainPN.append(
             Pnetwork('main' + str(agent), h_size[agent], agent, env,
-                trace_length=trace_length, batch_size=batch_size,))
+                trace_length=trace_length, batch_size=batch_size,
+                     changed_config= changed_config, ac_lr=ac_lr,
+                     use_MAE=use_MAE, use_toolbox_env=use_toolbox_env,
+                     clip_loss_norm=clip_loss_norm,
+                     entropy_coeff=entropy_coeff,
+                     weigth_decay=weigth_decay))
+        print("mainPN_step")
         mainPN_step.append(
             Pnetwork('main' + str(agent), h_size[agent], agent, env,
                 trace_length=trace_length, batch_size=batch_size,
-                reuse=True, step=True))
+                reuse=True, step=True, use_MAE=use_MAE,
+                     changed_config= changed_config, ac_lr=ac_lr,
+                     use_toolbox_env=use_toolbox_env,
+                     clip_loss_norm=clip_loss_norm,
+                     entropy_coeff=entropy_coeff,
+                     weigth_decay=weigth_decay))
 
     # Clones of the opponents
     if opp_model:
@@ -66,7 +82,12 @@ def train(env, *, num_episodes, trace_length, batch_size,
         for agent in range(total_n_agents):
             mainPN_clone.append(
                 Pnetwork('clone' + str(agent), h_size[agent], agent, env,
-                         trace_length=trace_length, batch_size=batch_size))
+                         trace_length=trace_length, batch_size=batch_size,
+                         changed_config= changed_config, ac_lr=ac_lr,
+                         use_MAE=use_MAE, use_toolbox_env=use_toolbox_env,
+                         clip_loss_norm=clip_loss_norm,
+                         entropy_coeff=entropy_coeff,
+                         weigth_decay=weigth_decay))
 
     if not mem_efficient:
         cube, cube_ops = make_cube(trace_length)
@@ -74,12 +95,14 @@ def train(env, *, num_episodes, trace_length, batch_size,
         cube, cube_ops = None, None
 
     if not opp_model:
-        corrections_func(mainPN, batch_size, trace_length, corrections, cube)
+        corrections_func(mainPN, batch_size, trace_length, corrections, cube, clip_lola_update_norm=clip_lola_update_norm)
     else:
         corrections_func([mainPN[0], mainPN_clone[1]],
-                         batch_size, trace_length, corrections, cube)
+                         batch_size, trace_length, corrections, cube,
+                         clip_lola_update_norm=clip_lola_update_norm)
         corrections_func([mainPN[1], mainPN_clone[0]],
-                         batch_size, trace_length, corrections, cube)
+                         batch_size, trace_length, corrections, cube,
+                         clip_lola_update_norm=clip_lola_update_norm)
         clone_update(mainPN_clone)
 
     init = tf.global_variables_initializer()
@@ -91,6 +114,10 @@ def train(env, *, num_episodes, trace_length, batch_size,
     jList = []
     rList = []
     aList = []
+    update1_list = []
+    update2_list = []
+    values_list = []
+    values_1_list = []
 
     total_steps = 0
 
@@ -120,6 +147,7 @@ def train(env, *, num_episodes, trace_length, batch_size,
 
         sP = env.reset()
         updated =True
+        warmup_step_n = 0
         for i in range(num_episodes):
             episodeBuffer = []
             for ii in range(n_agents):
@@ -130,12 +158,19 @@ def train(env, *, num_episodes, trace_length, batch_size,
             else:
                 these_agents = sorted(agent_list[0:n_agents])
 
-            # using coin game from lola.envs
-            #Reset environment and get first new observation
-            sP = env.reset()
-            # using coin game from lola_dice.envs
-            obs, _ = env.reset()
-            sP = obs[0]
+            if warmup_step_n < warmup:
+                warmup_step_n += 1
+
+            if not use_toolbox_env:
+                # using coin game from lola.envs
+                #Reset environment and get first new observation
+                # sP = env.reset()
+                # using coin game from lola_dice.envs
+                obs, _ = env.reset()
+                sP = obs[0]
+            else:
+                obs = env.reset()
+                sP = obs["player_red"]
 
             s = sP
 
@@ -158,11 +193,13 @@ def train(env, *, num_episodes, trace_length, batch_size,
                 j += 1
                 a_all = []
                 lstm_state = []
+                log_pi_all = []
                 for agent_role, agent in enumerate(these_agents):
-                    a, lstm_s = sess.run(
+                    a, lstm_s, log_pi = sess.run(
                         [
                             mainPN_step[agent].predict,
-                            mainPN_step[agent].lstm_state_output
+                            mainPN_step[agent].lstm_state_output,
+                            mainPN_step[agent].log_pi
                         ],
                         feed_dict={
                             mainPN_step[agent].state_input: s,
@@ -171,23 +208,36 @@ def train(env, *, num_episodes, trace_length, batch_size,
                     )
                     lstm_state.append(lstm_s)
                     a_all.append(a)
+                    log_pi_all.append(log_pi)
 
                 trainBatch0[0].append(s)
                 trainBatch1[0].append(s)
                 trainBatch0[1].append(a_all[0])
                 trainBatch1[1].append(a_all[1])
 
-                # using coin game from lola.envs
-                # a_all = np.transpose(np.vstack(a_all))
-                # s1P,r,d = env.step(actions=a_all)
-                # using coin game from lola_dice.envs
-                obs, r, d, info = env.step(a_all)
-                d = np.array([d for _ in range(batch_size)])
-                s1P = obs[0]
-                last_info.update(info)
-                a_all = np.transpose(np.vstack(a_all))
-                # print("s1P,r,d", s1P,r,d)
+                if not use_toolbox_env:
+                    # using coin game from lola.envs
+                    # a_all = np.transpose(np.vstack(a_all))
+                    # s1P,r,d = env.step(actions=a_all)
+                    # using coin game from lola_dice.envs
+                    obs, r, d, info = env.step(a_all)
+                    d = np.array([d for _ in range(batch_size)])
+                    s1P = obs[0]
+                    last_info.update(info)
+                    # print("s1P,r,d", s1P,r,d)
+                else:
+                    actions = {"player_red": a_all[0],
+                               "player_blue": a_all[1]}
+                    obs, r, d, info = env.step(actions)
+                    d = np.array([d["__all__"] for _ in range(batch_size)])
+                    s1P = obs["player_red"]
+                    if 'player_red' in info.keys():
+                        last_info.update({ f"player_red_{k}" : v for k, v in info['player_red'].items()})
+                    if 'player_blue' in info.keys():
+                        last_info.update({ f"player_blue_{k}": v for k, v in info['player_blue'].items()})
+                    r = [r['player_red'], r['player_blue']]
 
+                a_all = np.transpose(np.vstack(a_all))
                 s1 = s1P
 
                 trainBatch0[2].append(r[0])
@@ -304,10 +354,17 @@ def train(env, *, num_episodes, trace_length, batch_size,
             actions0 = np.concatenate(trainBatch0[1], axis=0)
             actions1 = np.concatenate(trainBatch1[1], axis=0)
 
-            last_state = np.reshape(
-                np.concatenate(trainBatch1[3], axis=0),
-                [batch_size, trace_length, env.ob_space_shape[0],
-                 env.ob_space_shape[1], env.ob_space_shape[2]])[:,-1,:,:,:]
+            if use_toolbox_env:
+                ob_space_shape = list(env.OBSERVATION_SPACE.shape)
+                last_state = np.reshape(
+                    np.concatenate(trainBatch1[3], axis=0),
+                    [batch_size, trace_length, ob_space_shape[0],
+                     ob_space_shape[1], ob_space_shape[2]])[:, -1, :, :, :]
+            else:
+                last_state = np.reshape(
+                    np.concatenate(trainBatch1[3], axis=0),
+                    [batch_size, trace_length, env.ob_space_shape[0],
+                     env.ob_space_shape[1], env.ob_space_shape[2]])[:, -1, :, :, :]
 
             value_0_next, value_1_next = sess.run(
                 [mainPN_step[0].value, mainPN_step[1].value],
@@ -385,18 +442,95 @@ def train(env, *, num_episodes, trace_length, batch_size,
                     mainPN_clone[0].gamma_array: np.reshape(discount,[1,-1]),
                     mainPN_clone[1].gamma_array:  np.reshape(discount,[1,-1]),
                 })
-            values, values_1, _, _, update1, update2 = sess.run(
-                [
-                    mainPN[0].value,
-                    mainPN[1].value,
-                    mainPN[0].updateModel,
-                    mainPN[1].updateModel,
-                    mainPN[0].delta,
-                    mainPN[1].delta
-                ],
-                feed_dict=feed_dict)
 
-            update(mainPN, lr, update1 / bs_mul, update2 / bs_mul)
+            if perform_lola_update:
+                (values, values_1, #updateModel_1, updateModel_2,
+                 update1, update2,
+                 player_1_value, player_2_value, player_1_target, player_2_target,
+                 player_1_loss, player_2_loss, entropy_p_0, entropy_p_1, v_0_log, v_1_log,
+                 actor_target_error_0, actor_target_error_1, actor_loss_0, actor_loss_1,
+                 parameters_norm_0, parameters_norm_1, value_params_norm_0, value_params_norm_1,
+                 second_order0, second_order1, v_0_grad_theta_0, v_1_grad_theta_1) = sess.run(
+                    [
+                        mainPN[0].value,
+                        mainPN[1].value,
+                        # mainPN[0].updateModel,
+                        # mainPN[1].updateModel,
+                        mainPN[0].delta,
+                        mainPN[1].delta,
+
+                        mainPN[0].value,
+                        mainPN[1].value,
+                        mainPN[0].target,
+                        mainPN[1].target,
+                        mainPN[0].loss,
+                        mainPN[1].loss,
+                        mainPN[0].entropy,
+                        mainPN[1].entropy,
+
+                        mainPN[0].v_0_log,
+                        mainPN[1].v_1_log,
+
+                        mainPN[0].actor_target_error,
+                        mainPN[1].actor_target_error,
+                        mainPN[0].actor_loss,
+                        mainPN[1].actor_loss,
+
+                        mainPN[0].parameters_norm,
+                        mainPN[1].parameters_norm,
+                        mainPN[0].value_params_norm,
+                        mainPN[1].value_params_norm,
+
+                        mainPN[0].v_0_grad_01,
+                        mainPN[1].v_1_grad_10,
+                        # mainPN[0].getparams(),
+                        # mainPN[1].getparams(),
+
+                        mainPN[0].grad,
+                        mainPN[1].grad,
+                    ],
+                    feed_dict=feed_dict)
+
+
+
+                if warmup:
+                    update1 = update1 * warmup_step_n / warmup
+                    update2 = update2 * warmup_step_n / warmup
+
+                update1_to_log = update1 / bs_mul
+                update2_to_log = update2 / bs_mul
+                print(len(update1), len(update2), "update1, update2", sum(update1_to_log), sum(update2_to_log))
+                # update1_list.append(sum(update1_to_log))
+                # update2_list.append(sum(update2_to_log))
+
+                update(mainPN, lr, update1 / bs_mul, update2 / bs_mul)
+
+            else:
+                (values, values_1, updateModel_1, updateModel_2,  # update1, update2,
+                 player_1_target, player_2_target, player_1_loss, player_2_loss,
+                 entropy_p_0, entropy_p_1, v_0_log, v_1_log) = sess.run(
+                    [
+                        mainPN[0].value,
+                        mainPN[1].value,
+                        mainPN[0].updateModel,
+                        mainPN[1].updateModel,
+                        # mainPN[0].delta,
+                        # mainPN[1].delta,
+
+                        mainPN[0].target,
+                        mainPN[1].target,
+                        mainPN[0].loss,
+                        mainPN[1].loss,
+                        mainPN[0].entropy,
+                        mainPN[1].entropy,
+
+                        mainPN[0].v_0_log,
+                        mainPN[1].v_1_log,
+                    ],
+                    feed_dict=feed_dict)
+
+            # values_list.append(sum(values))
+            # values_1_list.append(sum(values_1))
             updated = True
             print('update params')
 
@@ -442,12 +576,53 @@ def train(env, *, num_episodes, trace_length, batch_size,
                                 for i in range(0, 4, 1)}
                 actions_freq.update({f"player_blue_act_{i - 4}": action_log[i] / to_plot['n_steps_per_summary']
                                 for i in range(4, 8, 1)})
+                # log first step in batch
+                actions_freq.update({f"player_red_single_act_{i}": log_pi_all[0][0][i] for i in range(4)})
+                actions_freq.update({f"player_blue_single_act_{i}": log_pi_all[1][0][i] for i in range(4)})
 
                 last_info.pop("available_actions", None)
 
+
                 training_info = {
-                    "player_1_update": update1.sum(),
-                    "player_2_update": update2.sum(),
+                    "player_1_values": sum(values),
+                    "player_2_values": sum(values_1),
+                    "player_1_value_next": sum(value_0_next),
+                    "player_2_value_next": sum(value_1_next),
+                    "player_1_target": sum(player_1_target),
+                    "player_2_target": sum(player_2_target),
+                    "player_1_loss": player_1_loss,
+                    "player_2_loss": player_2_loss,
+                    "v_0_log": v_0_log,
+                    "v_1_log": v_1_log,
+                    "entropy_p_0": entropy_p_0,
+                    "entropy_p_1": entropy_p_1,
+                    "sample_reward0": sample_reward0,
+                    "sample_reward1": sample_reward1,
+                    "actor_target_error_0": actor_target_error_0,
+                    "actor_target_error_1": actor_target_error_1,
+                    "actor_loss_0": actor_loss_0,
+                    "actor_loss_1": actor_loss_1,
+                    "sample_return0": sample_return0,
+                    "sample_return1": sample_return1,
+                    "parameters_norm_0": parameters_norm_0,
+                    "value_params_norm_0": value_params_norm_0,
+                    "parameters_norm_1": parameters_norm_1,
+                    "value_params_norm_1": value_params_norm_1,
+                    "params_0": mainPN[0].getparams(),
+                    "params_1": mainPN[1].getparams(),
+                    "second_order0": second_order0,
+                    "second_order1": second_order1,
+                    "v_0_grad_theta_0": v_0_grad_theta_0,
+                    "v_1_grad_theta_1": v_1_grad_theta_1,
+
                 }
+                if perform_lola_update:
+                    training_info["player_1_update"] = sum(update1_to_log)
+                    training_info["player_2_update"] = sum(update2_to_log)
+
+                # update1_list.clear()
+                # update2_list.clear()
+                # values_list.clear()
+                # values_1_list.clear()
 
                 tune.report(**to_plot, **last_info, **training_info, **actions_freq)
