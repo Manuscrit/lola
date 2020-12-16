@@ -16,13 +16,14 @@ class Pnetwork:
     def __init__(self, myScope, h_size, agent, env, trace_length, batch_size,
                  reuse=None, step=False, changed_config= False, ac_lr=1.0, use_MAE=False,
                  use_toolbox_env=False, clip_loss_norm=False, sess=None, entropy_coeff=1.0,
-                 weigth_decay=0.01):
+                 weigth_decay=0.01, use_critic=False):
         self.sess = sess
 
         if use_toolbox_env:
             ob_space_shape = list(env.OBSERVATION_SPACE.shape)
         else:
             ob_space_shape = env.ob_space_shape
+        print("ob_space_shape", ob_space_shape)
 
         if step:
             trace_length = 1
@@ -65,36 +66,76 @@ class Pnetwork:
                 shape=[None, trace_length],
                 dtype=tf.float32,
                 name='sample_reward')
-            with tf.variable_scope('input_proc', reuse=reuse):
-                if not changed_config:
-                    output = layers.convolution2d(self.state_input,
-                        stride=1, kernel_size=3, num_outputs=20,
-                        normalizer_fn=layers.batch_norm, activation_fn=tf.nn.relu)
-                    output = layers.convolution2d(output,
-                        stride=1, kernel_size=3, num_outputs=20,
-                        normalizer_fn=layers.batch_norm, activation_fn=tf.nn.relu)
-                    output = layers.flatten(output)
+            self.sample_reward_bis = tf.placeholder(
+                shape=[None, trace_length],
+                dtype=tf.float32,
+                name='sample_reward')
 
-                    # print_op_22 = tf.print("output", output)
-                    # with tf.control_dependencies([print_op_22]):
-                    # self.value = tf.reshape(layers.fully_connected(
-                    #     tf.nn.relu(output), 1), [-1, trace_length])
-                    # self.value = tf.reshape(layers.fully_connected(
-                    #     output, 1, activation_fn=None), [-1, trace_length])
+            self.j = tf.placeholder(
+                shape=[None],
+                dtype=tf.float32,
+                name='j')
+
+            self.loss_multiplier = tf.placeholder(
+                shape=[1],
+                dtype=tf.float32,
+                name='loss_multiplier')
+
+            with tf.variable_scope('input_proc', reuse=reuse):
+                # if not changed_config:
+                output = layers.convolution2d(self.state_input,
+                    stride=1, kernel_size=3, num_outputs=20,
+                    normalizer_fn=layers.batch_norm, activation_fn=tf.nn.relu)
+                output = layers.convolution2d(output,
+                    stride=1, kernel_size=3, num_outputs=20,
+                    normalizer_fn=layers.batch_norm, activation_fn=tf.nn.relu)
+
+                output = layers.flatten(output)
+
+                # if step:
+                #     position_in_epi = self.j
+                # else:
+                #     position_in_epi = tf.range(start=0, limit=trace_length, delta=1)
+                # position_in_epi = tf.cast(position_in_epi, tf.float32)
+                # position_in_epi = tf.reshape(position_in_epi, [-1, 1])
+                # position_in_epi = tf.concat([position_in_epi for i in range(self.batch_size)], axis=0)
+                # print_op_23 = tf.print("position_in_epi", tf.shape(position_in_epi))
+                # print_op_24 = tf.print("position_in_epi", position_in_epi)
+                # with tf.control_dependencies(
+                #         [print_op_23, print_op_24]):
+                #     output_for_value = tf.concat([output, position_in_epi], 1)
+                # print_op_23 = tf.print("output_for_value", tf.shape(output_for_value))
+                # print_op_24 = tf.print("output_for_value", output_for_value)
+                # with tf.control_dependencies(
+                #         [print_op_23, print_op_24]):
+                #     interm = layers.fully_connected(tf.nn.relu(output_for_value), 1, activation_fn=None)
+                # print("interm", interm.shape)
+                # interm_splits = tf.split(interm, [ self.batch_size for i in range(trace_length)], 0)
+                # print_op_23 = tf.print("interm_splits", tf.shape(interm_splits))
+                # print_op_24 = tf.print("interm_splits", interm_splits)
+                # with tf.control_dependencies(
+                #         [print_op_23, print_op_24]):
+                #     self.value = tf.reshape(tf.stack(interm_splits, axis=1), [-1, trace_length])
+                # print("self.value", self.value.shape)
+
+                # output_temp = tf.stop_gradient(output)
+
+                # With a corrected Critic
+                # self.value = tf.reshape(layers.fully_connected(
+                #     tf.nn.relu(output), 1, activation_fn=None), [-1, trace_length])
+
+                # Without a Critic
+                if use_critic:
+                    self.value = tf.reshape(layers.fully_connected(
+                        tf.nn.relu(output), 1), [-1, trace_length])
+                else:
                     self.value = tf.reshape(layers.fully_connected(
                         tf.nn.relu(output), 1), [-1, trace_length]) * 0.0
-                else:
-                    output = layers.convolution2d(self.state_input,
-                        stride=1, kernel_size=(3, 3), num_outputs=16,
-                        normalizer_fn=None, activation_fn=tf.nn.leaky_relu)
-                    output = layers.convolution2d(output,
-                        stride=1, kernel_size=(3, 3), num_outputs=32,
-                        normalizer_fn=None, activation_fn=tf.nn.leaky_relu)
-                    output = layers.flatten(output)
-                    # value_output = tf.stop_gradient(output)
-                    self.value = tf.reshape(layers.fully_connected(
-                        output, 1,), [-1, trace_length])
-            # output_temp = output
+
+                # Original:
+                # self.value = tf.reshape(layers.fully_connected(
+                #     tf.nn.relu(output), 1), [-1, trace_length]) * 0.0
+
             if step:
                 output_seq = batch_to_seq(output, self.batch_size, 1)
             else:
@@ -106,12 +147,6 @@ class Pnetwork:
             output = layers.fully_connected(output,
                                             num_outputs=env.NUM_ACTIONS,
                                             activation_fn=None)
-            # output = layers.fully_connected(output_temp,
-            #                                 num_outputs=env.NUM_ACTIONS,
-            #                                 activation_fn=None)
-            # print_op_23 = tf.print("self.value", tf.math.reduce_sum(self.value))
-            # with tf.control_dependencies(
-            #         [print_op_23]):
             self.log_pi = tf.nn.log_softmax(output)
             self.lstm_state_output = state_output
 
@@ -123,32 +158,28 @@ class Pnetwork:
             self.actions_onehot = tf.one_hot(
                 self.actions, env.NUM_ACTIONS, dtype=tf.float32)
 
-            # print_op_30 = tf.print("self.entropy", self.entropy)
-            # with tf.control_dependencies(
-            #         [print_op_30]):
             predict = tf.multinomial(self.log_pi, 1)
             self.predict = tf.squeeze(predict)
 
             self.next_value = tf.placeholder(
                 shape=[None,1], dtype=tf.float32, name='next_value')
             self.next_v = tf.matmul(self.next_value, self.gamma_array_inverse)
-            self.target = self.sample_return + self.next_v
+            if use_critic:
+                self.target = self.sample_reward_bis + self.next_v
+            else:
+                self.target = self.sample_return + self.next_v
             # self.target = self.sample_return #+ self.next_v
+            # self.target = self.sample_reward_bis + self.next_v
 
             if not use_MAE:
                 self.td_error = tf.square(self.target-self.value) / 2
             else:
                 self.td_error = tf.abs(self.target-self.value) / 2
 
-            # print_op_24 = tf.print("self.td_error", tf.math.reduce_sum(self.td_error))
-            # print_op_25 = tf.print("entropy_temp", tf.math.reduce_sum(entropy_temp))
-            # print_op_26 = tf.print("self.entropy", tf.math.reduce_sum(self.entropy))
-            # print_op_27 = tf.print("self.log_pi", tf.shape(self.log_pi))
-            # print_op_28 = tf.print("entropy_temp", tf.shape(entropy_temp))
-
-            # with tf.control_dependencies(
-            #         [print_op_24, print_op_25, print_op_26, print_op_27, print_op_28]):
-            self.loss = tf.reduce_mean(self.td_error)
+            if use_critic:
+                self.loss = tf.reduce_mean(self.td_error)
+            else:
+                self.loss = tf.reduce_mean(self.td_error) * 0.0
 
         self.parameters = []
         self.value_params = []
@@ -161,8 +192,8 @@ class Pnetwork:
         print("myScope", myScope)
         print("self.parameters", self.parameters)
         print("self.value_params", self.value_params)
-        self.parameters_norm = tf.reduce_sum([tf.reduce_sum(p) for p in self.parameters])
-        self.value_params_norm = tf.reduce_sum([tf.reduce_sum(p) for p in self.value_params])
+        self.parameters_norm = tf.reduce_sum([tf.reduce_sum(p*p) for p in self.parameters])
+        self.value_params_norm = tf.reduce_sum([tf.reduce_sum(p*p) for p in self.value_params])
 
         if self.sess is not None:
             self.getparams = GetFlatWtSess(self.parameters, self.sess)
@@ -181,10 +212,10 @@ class Pnetwork:
             # self.trainer = tf.train.GradientDescentOptimizer(learning_rate=1)
             self.trainer = tf.train.GradientDescentOptimizer(learning_rate=ac_lr)
 
-            self.weigths_norm = tf.concat(axis=0, values=[tf.reshape(v, [numel(v)]) for v in self.parameters])
-            self.weigths_norm = math_ops.reduce_sum(self.weigths_norm * self.weigths_norm, None, keepdims=True)
-            self.weigths_norm = tf.reduce_sum(self.weigths_norm)
-            # self.weigths_norm = tf.sqrt(self.weigths_norm)
+            weigths_norm = tf.concat(axis=0, values=[tf.reshape(v, [numel(v)]) for v in self.parameters])
+            weigths_norm = math_ops.reduce_sum(weigths_norm * weigths_norm, None, keepdims=True)
+            weigths_norm = tf.reduce_sum(weigths_norm)
+            self.weigths_norm = tf.sqrt(weigths_norm)
 
 
             if clip_loss_norm:
@@ -192,9 +223,13 @@ class Pnetwork:
                 print_op_1 = tf.print("loss l2sum", l2sum)
                 with tf.control_dependencies([print_op_1]):
                     self.loss = tf.clip_by_norm(self.loss, clip_loss_norm, axes=None, name=None)
+            if use_critic:
+                total_loss = ((self.loss + entropy_coeff*self.entropy + weigth_decay*self.weigths_norm) *
+                             self.loss_multiplier)
+            else:
+                total_loss = (entropy_coeff * self.entropy + weigth_decay * self.weigths_norm) * self.loss_multiplier
             self.updateModel = self.trainer.minimize(
-                self.loss + entropy_coeff*self.entropy + weigth_decay*self.weigths_norm, var_list=self.value_params)
-
+                total_loss, var_list=self.value_params)
         # self.setparams= SetFromFlat(self.parameters)
         # self.getparams= GetFlat(self.parameters)
 
@@ -208,7 +243,11 @@ class Qnetwork:
     """
     Simple Q-network used in IPD experiments.
     """
-    def __init__(self, myScope, agent, env, batch_size, gamma, trace_length, hidden, simple_net, lr):
+    def __init__(self, myScope, agent, env, batch_size, gamma, trace_length, hidden, simple_net, lr, sess):
+
+        self.sess = sess
+
+
         #The network recieves a frame from the game, flattened into an array.
         #It then resizes it and processes it through four convolutional layers.
         with tf.variable_scope(myScope):
@@ -260,8 +299,15 @@ class Qnetwork:
 
         self.log_pi_action_bs = tf.reduce_sum(tf.reshape(self.log_pi_action, [-1, trace_length]),1)
         self.log_pi_action_bs_t = tf.reshape(self.log_pi_action, [batch_size, trace_length])
-        self.setparams= SetFromFlat(self.parameters)
-        self.getparams= GetFlat(self.parameters)
+        # self.setparams= SetFromFlat(self.parameters)
+        # self.getparams= GetFlat(self.parameters)
+
+        if self.sess is not None:
+            self.getparams = GetFlatWtSess(self.parameters, self.sess)
+            self.setparams = SetFromFlatWtSess(self.parameters, self.sess)
+        else:
+            self.getparams = GetFlat(self.parameters)
+            self.setparams = SetFromFlat(self.parameters)
 
 
 class ExperienceBuffer:

@@ -33,52 +33,55 @@ def clone_update(mainPN_clone):
             -mainPN_clone[i].log_pi_clone, var_list=mainPN_clone[i].parameters)
 
 
-class LOLAPGTrainableClass(tune.Trainable):
+class LOLAPGCG(tune.Trainable):
 
-    def _init_lola(self, exp_name, seed, num_episodes, trace_length, batch_size,
+    def _init_lola(self, env, seed, num_episodes, trace_length, batch_size,
                    lola_update, opp_model, grid_size, gamma, hidden, bs_mul, lr,
                    mem_efficient=True, asymmetry=False, warmup=False,
                    changed_config=False, ac_lr=1.0, summary_len=20, use_MAE=False,
-                   perform_lola_update=True, use_toolbox_env=False,
+                   use_toolbox_env=False,
                    clip_lola_update_norm=False, clip_loss_norm=False,
-                   entropy_coeff=0.0, **kwargs):
+                   entropy_coeff=0.0, weigth_decay=0.0, lola_correction_multiplier=1.0,
+                   clip_lola_correction_norm=False,
+                   clip_lola_actor_norm=False, use_critic=False,
+                   lr_decay=False, correction_reward_baseline_per_step=False,
+                   **kwargs):
 
         print("args not used:",kwargs)
 
         corrections = lola_update
 
         # Instantiate the environment
-        if exp_name == "CoinGame":
+        if env == CoinGame:
             if use_toolbox_env:
-                env = CoinGame(config={
+                self.env = CoinGame(config={
                     "batch_size": batch_size,
                     "max_steps": trace_length,
                     "grid_size": grid_size,
                     "get_additional_info": True,
                 })
             else:
-                env = lola_dice.envs.CG(trace_length, batch_size, grid_size)
-            env.seed(seed)
-        elif exp_name == "AsymCoinGame":
+                self.env = lola_dice.envs.CG(trace_length, batch_size, grid_size)
+            self.env.seed(seed)
+        elif env == AsymCoinGame:
             if use_toolbox_env:
-                env = AsymCoinGame(config={
+                self.env = AsymCoinGame(config={
                     "batch_size": batch_size,
                     "max_steps": trace_length,
                     "grid_size": grid_size,
                     "get_additional_info": True,
                 })
             else:
-                env = lola_dice.envs.AsymCG(trace_length, batch_size, grid_size)
-            env.seed(seed)
+                self.env = lola_dice.envs.AsymCG(trace_length, batch_size, grid_size)
+            self.env.seed(seed)
         else:
-            raise ValueError(f"exp_name: {exp_name}")
+            raise ValueError(f"exp_name: {env}")
 
 
 
 
         self.timestep = 0
 
-        self.env = env
         self.num_episodes = num_episodes
         self.trace_length = trace_length
         self.batch_size = batch_size
@@ -90,24 +93,27 @@ class LOLAPGTrainableClass(tune.Trainable):
         self.bs_mul = bs_mul
         self.lr = lr
         self.mem_efficient = mem_efficient
-        self.asymmetry = exp_name == "AsymCoinGame"
+        self.asymmetry = env == AsymCoinGame
         self.warmup = warmup
         self.changed_config = changed_config
         self.ac_lr = ac_lr
         self.summary_len = summary_len
         self.use_MAE = use_MAE
-        self.perform_lola_update = perform_lola_update
         self.use_toolbox_env = use_toolbox_env
         self.clip_lola_update_norm = clip_lola_update_norm
         self.clip_loss_norm = clip_loss_norm
         self.entropy_coeff = entropy_coeff
+        self.lola_correction_multiplier = lola_correction_multiplier
+        self.lr_decay = lr_decay
+        self.correction_reward_baseline_per_step = correction_reward_baseline_per_step
+        self.use_critic = use_critic
 
         # Setting the training parameters
         self.y = gamma
         # num_episodes = num_episodes  # How many episodes of game environment to train network with.
         # load_model = False  # Whether to load a saved model.
         # path = "./drqn"  # The path to save our model to.
-        self.n_agents = env.NUM_AGENTS
+        self.n_agents = self.env.NUM_AGENTS
         self.total_n_agents = self.n_agents
         self.h_size = [hidden] * self.total_n_agents
         self.max_epLength = trace_length + 1  # The max allowed length of our episode.
@@ -129,33 +135,36 @@ class LOLAPGTrainableClass(tune.Trainable):
             for agent in range(self.total_n_agents):
                 print("mainPN", agent)
                 self.mainPN.append(
-                    Pnetwork(f'main_{agent}', self.h_size[agent], agent, env,
+                    Pnetwork(f'main_{agent}', self.h_size[agent], agent, self.env,
                              trace_length=trace_length, batch_size=batch_size,
                              changed_config=changed_config, ac_lr=ac_lr,
                              use_MAE=use_MAE, use_toolbox_env=use_toolbox_env,
                              clip_loss_norm=clip_loss_norm, sess=self.sess,
-                             entropy_coeff=entropy_coeff))
+                             entropy_coeff=entropy_coeff, weigth_decay=weigth_decay,
+                             use_critic=use_critic))
                 print("mainPN_step", agent)
                 self.mainPN_step.append(
-                    Pnetwork(f'main_{agent}', self.h_size[agent], agent, env,
+                    Pnetwork(f'main_{agent}', self.h_size[agent], agent, self.env,
                              trace_length=trace_length, batch_size=batch_size,
                              reuse=True, step=True, use_MAE=use_MAE,
                              changed_config=changed_config, ac_lr=ac_lr,
                              use_toolbox_env=use_toolbox_env,
                              clip_loss_norm=clip_loss_norm, sess=self.sess,
-                             entropy_coeff=entropy_coeff))
+                             entropy_coeff=entropy_coeff, weigth_decay=weigth_decay,
+                             use_critic=use_critic))
 
             # Clones of the opponents
             if opp_model:
                 self.mainPN_clone = []
                 for agent in range(self.total_n_agents):
                     self.mainPN_clone.append(
-                        Pnetwork(f'clone_{agent}', self.h_size[agent], agent, env,
+                        Pnetwork(f'clone_{agent}', self.h_size[agent], agent, self.env,
                                  trace_length=trace_length, batch_size=batch_size,
                                  changed_config=changed_config, ac_lr=ac_lr,
                                  use_MAE=use_MAE, use_toolbox_env=use_toolbox_env,
                                  clip_loss_norm=clip_loss_norm, sess=self.sess,
-                                 entropy_coeff=entropy_coeff))
+                                 entropy_coeff=entropy_coeff,
+                                 use_critic=use_critic))
 
             if not mem_efficient:
                 self.cube, self.cube_ops = make_cube(trace_length)
@@ -164,14 +173,26 @@ class LOLAPGTrainableClass(tune.Trainable):
 
             if not opp_model:
                 corrections_func(self.mainPN, batch_size, trace_length, corrections, self.cube,
-                                 clip_lola_update_norm=clip_lola_update_norm)
+                                 clip_lola_update_norm=clip_lola_update_norm,
+                                 lola_correction_multiplier=self.lola_correction_multiplier,
+                                 clip_lola_correction_norm=clip_lola_correction_norm,
+                                 clip_lola_actor_norm=clip_lola_actor_norm
+                                 )
             else:
                 corrections_func([self.mainPN[0], self.mainPN_clone[1]],
                                  batch_size, trace_length, corrections, self.cube,
-                                 clip_lola_update_norm=clip_lola_update_norm)
+                                 clip_lola_update_norm=clip_lola_update_norm,
+                                 lola_correction_multiplier=self.lola_correction_multiplier,
+                                 clip_lola_correction_norm=clip_lola_correction_norm,
+                                 clip_lola_actor_norm=clip_lola_actor_norm
+                                 )
                 corrections_func([self.mainPN[1], self.mainPN_clone[0]],
                                  batch_size, trace_length, corrections, self.cube,
-                                 clip_lola_update_norm=clip_lola_update_norm)
+                                 clip_lola_update_norm=clip_lola_update_norm,
+                                 lola_correction_multiplier=self.lola_correction_multiplier,
+                                 clip_lola_correction_norm=clip_lola_correction_norm,
+                                 clip_lola_actor_norm=clip_lola_actor_norm
+                                 )
                 clone_update(self.mainPN_clone)
 
             self.init = tf.global_variables_initializer()
@@ -186,8 +207,6 @@ class LOLAPGTrainableClass(tune.Trainable):
             self.aList = []
             self.update1_list = []
             self.update2_list = []
-            self.values_list = []
-            self.values_1_list = []
 
             self.total_steps = 0
 
@@ -198,7 +217,7 @@ class LOLAPGTrainableClass(tune.Trainable):
             self.episodes_run = np.zeros(self.total_n_agents)
             self.episodes_run_counter = np.zeros(self.total_n_agents)
             self.episodes_reward = np.zeros((self.total_n_agents, batch_size))
-            self.episodes_actions = np.zeros((self.total_n_agents, env.NUM_ACTIONS))
+            self.episodes_actions = np.zeros((self.total_n_agents, self.env.NUM_ACTIONS))
 
             pow_series = np.arange(trace_length)
             discount = np.array([pow(gamma, item) for item in pow_series])
@@ -219,8 +238,11 @@ class LOLAPGTrainableClass(tune.Trainable):
             _ = self.env.reset()
             self.updated = True
             self.warmup_step_n = 0
+            self.n_epi_from_start = 0
 
             self.reset_compute_actions_state()
+
+    # TODO add something to not load and create everything when only evaluating with RLLib
 
     def setup(self, config):
         print("_init_lola", config)
@@ -229,19 +251,6 @@ class LOLAPGTrainableClass(tune.Trainable):
     def step(self):
         self.timestep += 1
 
-        # with tf.Session() as sess:
-        # if load_model == True:
-        #     print( 'Loading Model...')
-        #     ckpt = tf.train.get_checkpoint_state(path)
-        #     saver.restore(sess, ckpt.model_checkpoint_path)
-        # sess.run(self.init)
-        # if not self.mem_efficient:
-        #     sess.run(self.cube_ops)
-        #
-        # sP = self.env.reset()
-        # updated = True
-        # warmup_step_n = 0
-        # for i in range(self.num_episodes):
         episodeBuffer = []
         for ii in range(self.n_agents):
             episodeBuffer.append([])
@@ -345,67 +354,71 @@ class LOLAPGTrainableClass(tune.Trainable):
 
             for index in range(self.batch_size):
                 r_pb = [r[0][index], r[1][index]]
-                # if np.array(r_pb).any():
-                #     if r_pb[0] == 1 and r_pb[1] == 0:
-                #         rAll[0] += 1
-                #     elif r_pb[0] == 0 and r_pb[1] == 1:
-                #         rAll[1] += 1
-                #     elif r_pb[0] == 1 and r_pb[1] == -2:
-                #         rAll[2] += 1
-                #     elif r_pb[0] == -2 and r_pb[1] == 1:
-                #         rAll[3] += 1
-                if not self.asymmetry:
-                    if np.array(r_pb).any():
-                        # player 1 pick coin 1
-                        if r_pb[0] == 1 and r_pb[1] == 0:
-                            rAll[0] += 1
-                        # player 2 pick coin 2
-                        elif r_pb[0] == 0 and r_pb[1] == 1:
-                            rAll[1] += 1
-                        # player 1 pick coin 2
-                        elif r_pb[0] == 1 and r_pb[1] == -2:
-                            rAll[2] += 1
-                        # player 2 pick coin 1
-                        elif r_pb[0] == -2 and r_pb[1] == 1:
-                            rAll[3] += 1
-                        # player 1 pick coin 2 and player 2 pick coin 2
-                        elif r_pb[0] == 1 and r_pb[1] == -1:
-                            rAll[4] += 1
-                        # player 1 pick coin 1 and player 2 pick coin 1
-                        elif r_pb[0] == -1 and r_pb[1] == 1:
-                            rAll[5] += 1
-                        else:
-                            raise ValueError(f"r_pb_{r_pb}")
-                    # Total reward for both agents
-                    rAll[6] += r_pb[0] + r_pb[1]
-                    # Count n steps in env
-                    rAll[7] += 1
-                else:
-                    if np.array(r_pb).any():
-                        # player 1 pick coin 1
-                        if r_pb[0] == 2 and r_pb[1] == 0:
-                            rAll[0] += 1
-                        # player 2 pick coin 2
-                        elif r_pb[0] == 0 and r_pb[1] == 1:
-                            rAll[1] += 1
-                        # player 1 pick coin 2
-                        elif r_pb[0] == 1 and r_pb[1] == -2:
-                            rAll[2] += 1
-                        # player 2 pick coin 1
-                        elif r_pb[0] == -1 and r_pb[1] == 1:
-                            rAll[3] += 1
-                        # player 1 pick coin 2 and player 2 pick coin 2
-                        elif r_pb[0] == 1 and r_pb[1] == -1:
-                            rAll[4] += 1
-                        # player 1 pick coin 1 and player 2 pick coin 1
-                        elif r_pb[0] == 1 and r_pb[1] == 1:
-                            rAll[5] += 1
-                        else:
-                            raise ValueError(f"r_pb_{r_pb}")
-                    # Total reward for both agents
-                    rAll[6] += r_pb[0] + r_pb[1]
-                    # Count n steps in env
-                    rAll[7] += 1
+                # # if np.array(r_pb).any():
+                # #     if r_pb[0] == 1 and r_pb[1] == 0:
+                # #         rAll[0] += 1
+                # #     elif r_pb[0] == 0 and r_pb[1] == 1:
+                # #         rAll[1] += 1
+                # #     elif r_pb[0] == 1 and r_pb[1] == -2:
+                # #         rAll[2] += 1
+                # #     elif r_pb[0] == -2 and r_pb[1] == 1:
+                # #         rAll[3] += 1
+                # if not self.asymmetry:
+                #     if np.array(r_pb).any():
+                #         # player 1 pick coin 1
+                #         if r_pb[0] == 1 and r_pb[1] == 0:
+                #             rAll[0] += 1
+                #         # player 2 pick coin 2
+                #         elif r_pb[0] == 0 and r_pb[1] == 1:
+                #             rAll[1] += 1
+                #         # player 1 pick coin 2
+                #         elif r_pb[0] == 1 and r_pb[1] == -2:
+                #             rAll[2] += 1
+                #         # player 2 pick coin 1
+                #         elif r_pb[0] == -2 and r_pb[1] == 1:
+                #             rAll[3] += 1
+                #         # player 1 pick coin 2 and player 2 pick coin 2
+                #         elif r_pb[0] == 1 and r_pb[1] == -1:
+                #             rAll[4] += 1
+                #         # player 1 pick coin 1 and player 2 pick coin 1
+                #         elif r_pb[0] == -1 and r_pb[1] == 1:
+                #             rAll[5] += 1
+                #         else:
+                #             raise ValueError(f"r_pb_{r_pb}")
+                #     # Total reward for both agents
+                #     rAll[6] += r_pb[0] + r_pb[1]
+                #     # Count n steps in env
+                #     rAll[7] += 1
+                # else:
+                #     if np.array(r_pb).any():
+                #         # player 1 pick coin 1
+                #         if r_pb[0] == 2 and r_pb[1] == 0:
+                #             rAll[0] += 1
+                #         # player 2 pick coin 2
+                #         elif r_pb[0] == 0 and r_pb[1] == 1:
+                #             rAll[1] += 1
+                #         # player 1 pick coin 2
+                #         elif r_pb[0] == 1 and r_pb[1] == -2:
+                #             rAll[2] += 1
+                #         # player 2 pick coin 1
+                #         elif r_pb[0] == -1 and r_pb[1] == 1:
+                #             rAll[3] += 1
+                #         # player 1 pick coin 2 and player 2 pick coin 2
+                #         elif r_pb[0] == 1 and r_pb[1] == -1:
+                #             rAll[4] += 1
+                #         # player 1 pick coin 1 and player 2 pick coin 1
+                #         elif r_pb[0] == 1 and r_pb[1] == 1:
+                #             rAll[5] += 1
+                #         else:
+                #             raise ValueError(f"r_pb_{r_pb}")
+                #     # Total reward for both agents
+                #     rAll[6] += r_pb[0] + r_pb[1]
+                #     # Count n steps in env
+                #     rAll[7] += 1
+                # Total reward for both agents
+                rAll[6] += r_pb[0] + r_pb[1]
+                # Count n steps in env
+                rAll[7] += 1
 
                 aAll[a_all[index, 0]] += 1
                 aAll[a_all[index, 1] + 4] += 1
@@ -434,10 +447,20 @@ class LOLAPGTrainableClass(tune.Trainable):
         pow_series = np.arange(self.trace_length)
         discount = np.array([pow(self.gamma, item) for item in pow_series])
 
-        sample_reward0 = discount * np.reshape(
-            trainBatch0[2] - np.mean(trainBatch0[2]), [-1, self.trace_length])
-        sample_reward1 = discount * np.reshape(
-            trainBatch1[2] - np.mean(trainBatch1[2]), [-1, self.trace_length])
+        if self.correction_reward_baseline_per_step:
+            sample_reward0 = discount * np.reshape(
+                trainBatch0[2] - np.mean(np.array(trainBatch0[2]), axis=0), [-1, self.trace_length])
+            sample_reward1 = discount * np.reshape(
+                trainBatch1[2] - np.mean(np.array(trainBatch1[2]), axis=0), [-1, self.trace_length])
+        else:
+            sample_reward0 = discount * np.reshape(
+                trainBatch0[2] - np.mean(trainBatch0[2]), [-1, self.trace_length])
+            sample_reward1 = discount * np.reshape(
+                trainBatch1[2] - np.mean(trainBatch1[2]), [-1, self.trace_length])
+        sample_reward0_bis = discount * np.reshape(
+            trainBatch0[2], [-1, self.trace_length])
+        sample_reward1_bis = discount * np.reshape(
+            trainBatch1[2], [-1, self.trace_length])
 
         state_input0 = np.concatenate(trainBatch0[0], axis=0)
         state_input1 = np.concatenate(trainBatch1[0], axis=0)
@@ -489,16 +512,21 @@ class LOLAPGTrainableClass(tune.Trainable):
             theta_1_vals_clone = self.mainPN_clone[0].getparams()
             theta_2_vals_clone = self.mainPN_clone[1].getparams()
 
-            if len(self.rList) % self.summary_len == 0:
-                print('params check before optimization')
-                print('theta_1_vals', theta_1_vals)
-                print('theta_2_vals_clone', theta_2_vals_clone)
-                print('theta_2_vals', theta_2_vals)
-                print('theta_1_vals_clone', theta_1_vals_clone)
-                print('diff between theta_1 and theta_2_vals_clone',
-                      np.linalg.norm(theta_1_vals - theta_2_vals_clone))
-                print('diff between theta_2 and theta_1_vals_clone',
-                      np.linalg.norm(theta_2_vals - theta_1_vals_clone))
+            # if len(self.rList) % self.summary_len == 0:
+            #     print('params check before optimization')
+            #     print('theta_1_vals', theta_1_vals)
+            #     print('theta_2_vals_clone', theta_2_vals_clone)
+            #     print('theta_2_vals', theta_2_vals)
+            #     print('theta_1_vals_clone', theta_1_vals_clone)
+            #     print('diff between theta_1 and theta_2_vals_clone',
+            #           np.linalg.norm(theta_1_vals - theta_2_vals_clone))
+            #     print('diff between theta_2 and theta_1_vals_clone',
+            #           np.linalg.norm(theta_2_vals - theta_1_vals_clone))
+
+        if self.lr_decay:
+            lr_decay = (self.num_episodes - self.timestep) / self.num_episodes
+        else:
+            lr_decay = 1.0
 
         # Update policy networks
         feed_dict = {
@@ -510,6 +538,8 @@ class LOLAPGTrainableClass(tune.Trainable):
             self.mainPN[1].actions: actions1,
             self.mainPN[0].sample_reward: sample_reward0,
             self.mainPN[1].sample_reward: sample_reward1,
+            self.mainPN[0].sample_reward_bis: sample_reward0_bis,
+            self.mainPN[1].sample_reward_bis: sample_reward1_bis,
             self.mainPN[0].gamma_array: np.reshape(discount, [1, -1]),
             self.mainPN[1].gamma_array: np.reshape(discount, [1, -1]),
             self.mainPN[0].next_value: value_0_next,
@@ -518,6 +548,8 @@ class LOLAPGTrainableClass(tune.Trainable):
                 np.reshape(self.discount_array, [1, -1]),
             self.mainPN[1].gamma_array_inverse:
                 np.reshape(self.discount_array, [1, -1]),
+            self.mainPN[0].loss_multiplier: [lr_decay],
+            self.mainPN[1].loss_multiplier: [lr_decay],
         }
         if self.opp_model:
             feed_dict.update({
@@ -533,72 +565,73 @@ class LOLAPGTrainableClass(tune.Trainable):
                 self.mainPN_clone[1].gamma_array: np.reshape(discount, [1, -1]),
             })
 
-        if self.perform_lola_update:
-            (values, values_1, updateModel_1, updateModel_2, update1, update2,
-             player_1_value, player_2_value, player_1_target, player_2_target,
-             player_1_loss, player_2_loss, entropy_p_0, entropy_p_1, v_0_log, v_1_log) = self.sess.run(
-                [
-                    self.mainPN[0].value,
-                    self.mainPN[1].value,
-                    self.mainPN[0].updateModel,
-                    self.mainPN[1].updateModel,
-                    self.mainPN[0].delta,
-                    self.mainPN[1].delta,
+        (values, values_1, updateModel_1, updateModel_2,
+         update1, update2,
+         player_1_value, player_2_value, player_1_target, player_2_target,
+         player_1_loss, player_2_loss, entropy_p_0, entropy_p_1, v_0_log, v_1_log,
+         actor_target_error_0, actor_target_error_1, actor_loss_0, actor_loss_1,
+         parameters_norm_0, parameters_norm_1, # value_params_norm_0, value_params_norm_1,
+         second_order0, second_order1, v_0_grad_theta_0, v_1_grad_theta_1,
+         second_order0_sum, second_order1_sum,
+         actor_grad_sum_0, actor_grad_sum_1) = self.sess.run(
+            [
+                self.mainPN[0].value,
+                self.mainPN[1].value,
+                self.mainPN[0].updateModel,
+                self.mainPN[1].updateModel,
+                self.mainPN[0].delta,
+                self.mainPN[1].delta,
 
-                    self.mainPN[0].value,
-                    self.mainPN[1].value,
-                    self.mainPN[0].target,
-                    self.mainPN[1].target,
-                    self.mainPN[0].loss,
-                    self.mainPN[1].loss,
+                self.mainPN[0].value,
+                self.mainPN[1].value,
+                self.mainPN[0].target,
+                self.mainPN[1].target,
+                self.mainPN[0].loss,
+                self.mainPN[1].loss,
+                self.mainPN[0].entropy,
+                self.mainPN[1].entropy,
 
-                    self.mainPN[0].entropy,
-                    self.mainPN[1].entropy,
+                self.mainPN[0].v_0_log,
+                self.mainPN[1].v_1_log,
 
-                    self.mainPN[0].v_0_log,
-                    self.mainPN[1].v_1_log,
-                ],
-                feed_dict=feed_dict)
+                self.mainPN[0].actor_target_error,
+                self.mainPN[1].actor_target_error,
+                self.mainPN[0].actor_loss,
+                self.mainPN[1].actor_loss,
 
-            if self.warmup:
-                update1 = update1 * self.warmup_step_n / self.warmup
-                update2 = update2 * self.warmup_step_n / self.warmup
+                self.mainPN[0].weigths_norm,
+                self.mainPN[1].weigths_norm,
+                # self.mainPN[0].value_params_norm,
+                # self.mainPN[1].value_params_norm,
 
-            update1_to_log = update1 / self.bs_mul
-            update2_to_log = update2 / self.bs_mul
-            print(len(update1), len(update2), "update1, update2", sum(update1_to_log), sum(update2_to_log))
-            self.update1_list.append(sum(update1_to_log))
-            self.update2_list.append(sum(update2_to_log))
+                self.mainPN[0].v_0_grad_01,
+                self.mainPN[1].v_1_grad_10,
 
-            update(self.mainPN, self.lr, update1 / self.bs_mul, update2 / self.bs_mul)
+                self.mainPN[0].grad,
+                self.mainPN[1].grad,
 
-        else:
-            (values, values_1, updateModel_1, updateModel_2,  # update1, update2,
-             player_1_target, player_2_target, player_1_loss, player_2_loss,
-             entropy_p_0, entropy_p_1, v_0_log, v_1_log) = self.sess.run(
-                [
-                    self.mainPN[0].value,
-                    self.mainPN[1].value,
-                    self.mainPN[0].updateModel,
-                    self.mainPN[1].updateModel,
-                    # self.mainPN[0].delta,
-                    # self.mainPN[1].delta,
+                self.mainPN[0].second_order,
+                self.mainPN[1].second_order,
+                self.mainPN[0].grad_sum,
+                self.mainPN[1].grad_sum,
+            ],
+            feed_dict=feed_dict)
 
-                    self.mainPN[0].target,
-                    self.mainPN[1].target,
-                    self.mainPN[0].loss,
-                    self.mainPN[1].loss,
+        if self.warmup:
+            update1 = update1 * self.warmup_step_n / self.warmup
+            update2 = update2 * self.warmup_step_n / self.warmup
+        if self.lr_decay:
+            update1 = update1 * lr_decay
+            update2 = update2 * lr_decay
 
-                    self.mainPN[0].entropy,
-                    self.mainPN[1].entropy,
+        update1_to_log = update1 / self.bs_mul
+        update2_to_log = update2 / self.bs_mul
+        print(len(update1), len(update2), "update1, update2", sum(update1_to_log), sum(update2_to_log))
+        self.update1_list.append(sum(update1_to_log))
+        self.update2_list.append(sum(update2_to_log))
 
-                    self.mainPN[0].v_0_log,
-                    self.mainPN[1].v_1_log,
-                ],
-                feed_dict=feed_dict)
+        update(self.mainPN, self.lr, update1 / self.bs_mul, update2 / self.bs_mul)
 
-        self.values_list.append(sum(values))
-        self.values_1_list.append(sum(values_1))
         updated = True
         print('update params')
 
@@ -606,79 +639,93 @@ class LOLAPGTrainableClass(tune.Trainable):
         self.episodes_actions[agent] = self.episodes_actions[agent] * 0
         self.episodes_reward[agent] = self.episodes_reward[agent] * 0
 
-        if len(self.rList) % self.summary_len == 0 and len(self.rList) != 0 and updated:
-            updated = False
-            print("n epi", self.timestep, "over", self.num_episodes, "total_steps", self.total_steps)
-            print('reward', np.sum(self.rList[-self.summary_len:], 0))
-            rlog = np.sum(self.rList[-self.summary_len:], 0)
+        # if len(self.rList) % self.summary_len == 0 and len(self.rList) != 0 and updated:
+        updated = False
+        #     print("n epi", self.timestep, "over", self.num_episodes, "total_steps", self.total_steps)
+        #     print('reward', np.sum(self.rList[-self.summary_len:], 0))
+        rlog = np.sum(self.rList[-self.summary_len:], 0)
 
-            # for ii in range(len(rlog)):
-            #     logger.record_tabular('rList['+str(ii)+']', rlog[ii])
-            # logger.dump_tabular()
-            # logger.info('')
+        to_plot = {}
+        for ii in range(len(rlog)):
+        #     if ii == 0:
+        #         to_plot['red_pick_red'] = rlog[ii]
+        #     elif ii == 1:
+        #         to_plot['blue_pick_blue'] = rlog[ii]
+        #
+        #     elif ii == 2:
+        #         to_plot['red_pick_blue'] = rlog[ii]
+        #     elif ii == 3:
+        #         to_plot['blue_pick_red'] = rlog[ii]
+        #
+        #     elif ii == 4:
+        #         to_plot['both_pick_blue'] = rlog[ii]
+        #     elif ii == 5:
+        #         to_plot['both_pick_red'] = rlog[ii]
+        #
+            if ii == 6:
+                to_plot['total_reward'] = rlog[ii]
+            elif ii == 7:
+                to_plot['n_steps_per_summary'] = rlog[ii]
 
-            to_plot = {}
-            for ii in range(len(rlog)):
-                if ii == 0:
-                    to_plot['red_pick_red'] = rlog[ii]
-                elif ii == 1:
-                    to_plot['blue_pick_blue'] = rlog[ii]
+        action_log = np.sum(self.aList[-self.summary_len:], 0)
+        actions_freq = {f"player_red_act_{i}": action_log[i] / to_plot['n_steps_per_summary']
+                        for i in range(0, 4, 1)}
+        actions_freq.update({f"player_blue_act_{i - 4}": action_log[i] / to_plot['n_steps_per_summary']
+                             for i in range(4, 8, 1)})
 
-                elif ii == 2:
-                    to_plot['red_pick_blue'] = rlog[ii]
-                elif ii == 3:
-                    to_plot['blue_pick_red'] = rlog[ii]
+        last_info.pop("available_actions", None)
 
-                elif ii == 4:
-                    to_plot['both_pick_blue'] = rlog[ii]
-                elif ii == 5:
-                    to_plot['both_pick_red'] = rlog[ii]
+        training_info = {
+            "player_1_values": values,
+            "player_2_values": values_1,
+            # "player_1_value_next": value_0_next,
+            # "player_2_value_next": value_1_next,
+            "player_1_target": player_1_target,
+            "player_2_target": player_2_target,
+            "player_1_loss": player_1_loss,
+            "player_2_loss": player_2_loss,
+            "v_0_log": v_0_log,
+            "v_1_log": v_1_log,
+            "entropy_p_0": entropy_p_0,
+            "entropy_p_1": entropy_p_1,
+            "sample_reward0": sample_reward0,
+            "sample_reward1": sample_reward1,
+            # "actor_target_error_0": actor_target_error_0,
+            # "actor_target_error_1": actor_target_error_1,
+            "actor_loss_0": actor_loss_0,
+            "actor_loss_1": actor_loss_1,
+            "sample_return0": sample_return0,
+            "sample_return1": sample_return1,
+            "parameters_norm_0": parameters_norm_0,
+            # "value_params_norm_0": value_params_norm_0,
+            "parameters_norm_1": parameters_norm_1,
+            # "value_params_norm_1": value_params_norm_1,
+            # "params_0": self.mainPN[0].getparams(),
+            # "params_1": self.mainPN[1].getparams(),
+            # "second_order0": second_order0,
+            # "second_order1": second_order1,
+            "second_order0_sum": second_order0_sum,
+            "second_order1_sum": second_order1_sum,
+            # "v_0_grad_theta_0": v_0_grad_theta_0,
+            # "v_1_grad_theta_1": v_1_grad_theta_1,
+            "player_1_update_sum": sum(self.update1_list) / self.summary_len,
+            "player_2_update_sum": sum(self.update2_list) / self.summary_len,
+            # "player_1_update": update1,
+            # "player_2_update": update2,
+            "actor_grad_sum_0": actor_grad_sum_0,
+            "actor_grad_sum_1": actor_grad_sum_1,
+            "lr_decay_ratio": (self.num_episodes - self.timestep) / self.num_episodes,
+        }
 
-                elif ii == 6:
-                    to_plot['total_reward'] = rlog[ii]
-                elif ii == 7:
-                    to_plot['n_steps_per_summary'] = rlog[ii]
+        self.update1_list.clear()
+        self.update2_list.clear()
 
-            action_log = np.sum(self.aList[-self.summary_len:], 0)
-            actions_freq = {f"player_red_act_{i}": action_log[i] / to_plot['n_steps_per_summary']
-                            for i in range(0, 4, 1)}
-            actions_freq.update({f"player_blue_act_{i - 4}": action_log[i] / to_plot['n_steps_per_summary']
-                                 for i in range(4, 8, 1)})
-
-            last_info.pop("available_actions", None)
-
-            training_info = {
-                "player_1_values": sum(self.values_list) / self.summary_len,
-                "player_2_values": sum(self.values_1_list) / self.summary_len,
-                "player_1_value_next": sum(value_0_next),
-                "player_2_value_next": sum(value_1_next),
-                "player_1_target": sum(player_1_target),
-                "player_2_target": sum(player_2_target),
-                "player_1_loss": player_1_loss,
-                "player_2_loss": player_2_loss,
-                "v_0_log": v_0_log,
-                "v_1_log": v_1_log,
-                "entropy_p_0": entropy_p_0,
-                "entropy_p_1": entropy_p_1,
-
-            }
-            if self.perform_lola_update:
-                training_info["player_1_update"] = sum(self.update1_list) / self.summary_len
-                training_info["player_2_update"] = sum(self.update2_list) / self.summary_len
-
-            self.update1_list.clear()
-            self.update2_list.clear()
-            self.values_list.clear()
-            self.values_1_list.clear()
-
-            # tune.report(**to_plot, **last_info, **training_info, **actions_freq)
-
-            to_report = {"episodes_total": self.timestep}
-            to_report.update(to_plot)
-            to_report.update(last_info)
-            to_report.update(training_info)
-            to_report.update(actions_freq)
-            return to_report
+        to_report = {"episodes_total": self.timestep}
+        to_report.update(to_plot)
+        to_report.update(last_info)
+        to_report.update(training_info)
+        to_report.update(actions_freq)
+        return to_report
 
     def save_checkpoint(self, checkpoint_dir):
         path = os.path.join(checkpoint_dir, "checkpoint.json")
@@ -734,7 +781,6 @@ class LOLAPGTrainableClass(tune.Trainable):
 
     def _post_process_action(self, action):
         return action[None, ...]  # add batch dim
-
 
     def compute_actions(self, policy_id:str, obs_batch:list):
         # because of the LSTM

@@ -199,7 +199,7 @@ def compute_values(rews, last_vpreds, *, gamma, use_gae=False):
     return list(reversed(values[1:]))
 
 
-def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
+def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[], use_toolbox_env=False):
     """Rolls out a single batch of episode of the policies in the given environment.
 
     To avoid quadratic time complexity of the rollout in the number time steps
@@ -239,11 +239,17 @@ def rollout(env, policies, rollout_policies, sess, *, gamma, parent_traces=[]):
     sess.run(assign_ops, feed_dict=dict(parent_feed_list))
 
     # Roll out
-    t = 0
-    ob, all_info = env.reset()
-    info = all_info.pop("available_actions")
+    if use_toolbox_env:
+        raise NotImplementedError()
+        obs = env.reset()
+        ob = obs["player_red"]
+    else:
+        ob, all_info = env.reset()
+        info = all_info.pop("available_actions")
     done = False
     gamma_t = 1.
+    t = 0
+
     while not done:
         obs.append(ob)
         infos.append(info)
@@ -603,7 +609,8 @@ def train(env, make_policy, make_optimizer, *,
                 print("== For ag_idx",ag_idx, "==")
                 # Logging.
                 if n_inner_steps > 0:
-                    obs, acs, rets, vals, infos = list(zip(*inner_traces[0][ag_idx]))
+                    # obs, acs, rets, vals, infos = list(zip(*inner_traces[0][ag_idx]))
+                    obs, acs, rets, vals, infos = list(zip(*inner_traces[ag_idx][0]))
                     all_to_log = inner_all_to_log
                 else:
                     obs, acs, rets, vals, infos = list(zip(*outer_traces[ag_idx]))
