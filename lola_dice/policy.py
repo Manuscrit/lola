@@ -143,9 +143,10 @@ class SimplePolicy(Policy):
 class MLPPolicy(Policy):
     """A feed-forward network with one or multiple hidden layers."""
 
-    def __init__(self, ob_space_shape, num_actions, hidden_sizes=[16], prev=None):
+    def __init__(self, ob_space_shape, num_actions, hidden_sizes=[16], prev=None, batch_size=64):
         super(MLPPolicy, self).__init__(ob_space_shape, num_actions, prev=prev)
         self.hidden_sizes = hidden_sizes
+        self.batch_size = batch_size
 
     def build(self, scope, reuse=None):
         self.scope = scope
@@ -213,9 +214,10 @@ class MLPPolicy(Policy):
 class RecurrentPolicy(Policy):
     """A recurrent network with one or multiple hidden layers."""
 
-    def __init__(self, ob_space_shape, num_actions, hidden_sizes=[16], prev=None):
+    def __init__(self, ob_space_shape, num_actions, hidden_sizes=[16], prev=None, batch_size=64):
         super(MLPPolicy, self).__init__(ob_space_shape, num_actions, prev=prev)
         self.hidden_sizes = hidden_sizes
+        self.batch_size = batch_size
 
     def build(self, scope, reuse=None):
         self.scope = scope
@@ -284,10 +286,10 @@ class RecurrentPolicy(Policy):
 class ConvPolicy(Policy):
     """A feed-forward network with one or multiple conv layers and a final FC layer"""
 
-    batch_size = 64
-    def __init__(self, ob_space_shape, num_actions, hidden_sizes=[32, 16], prev=None):
+    def __init__(self, ob_space_shape, num_actions, hidden_sizes=[32, 16], prev=None, batch_size=64):
         super(ConvPolicy, self).__init__(ob_space_shape, num_actions, prev=prev)
         self.hidden_sizes = hidden_sizes
+        self.batch_size = batch_size
 
     def build(self, scope, reuse=None):
         self.scope = scope
@@ -314,46 +316,26 @@ class ConvPolicy(Policy):
 
                 last = self.obs_ph
                 last = tf.transpose(last, perm=[0,1,3,4,2])
-                # print_tg = tf.print("last -1",tf.shape(last))
-                # with tf.control_dependencies([print_tg]):
                 paddings = tf.constant([[0, 0],[0, 0],[1, 1], [1, 1], [0,0]])
                 last = tf.pad(last, paddings, "CONSTANT")
-            # with tf.variable_scope("policy_conv", reuse=reuse):
-            #     print_tg = tf.print("last 0",tf.shape(last))
-            #     with tf.control_dependencies([print_tg]):
                 for i, units in enumerate(self.hidden_sizes):
                     pol_lin = snt.Conv2D(output_channels=units, kernel_shape=(3,3),
                                          name="h_%d" % i, padding=snt.VALID)
-                    # print_tg = tf.print(f"last conv {i}", tf.shape(last))
-                    # print(last, tf.shape(last), last.shape)
-                    # with tf.control_dependencies([print_tg]):
                     last = snt.BatchApply(pol_lin)(last)
                     last = tf.nn.relu(last)
                     pol_params += [pol_lin.w, pol_lin.b]
-                # print_tg = tf.print("last",tf.shape(last))
-                # with tf.control_dependencies([print_tg]):
                 last = tf.reshape(last, shape=(-1, self.batch_size, self.hidden_sizes[-1]))
 
                 pol_lin = snt.Linear(self.num_actions)
-                # print_tg = tf.print("last 2", tf.shape(last))
-                # with tf.control_dependencies([print_tg]):
                 logits = snt.BatchApply(pol_lin)(last)
                 pol_params += [pol_lin.w, pol_lin.b]
                 # Mask out unavailable actions
                 # MA: Not sure how that affects the gradients. Maybe better for
                 #     the environment to mask out the actions?
                 mask = -9999999 * tf.ones_like(logits)
-            # with tf.variable_scope("policy_logit", reuse=reuse):
-            #     print_op_ter = tf.print("mask",mask.shape)
-            #     print_op = tf.print("logits",logits.shape, "self.avail_acs_ph", self.avail_acs_ph.shape)
-            #     print_op_bis = tf.print("logits",logits.get_shape().as_list(), "self.avail_acs_ph", self.avail_acs_ph.get_shape().as_list())
-            #     print_op_quad = tf.print("logits",tf.shape(logits), "self.avail_acs_ph",
-            #                           tf.shape(self.avail_acs_ph), "mask", tf.shape(mask))
-            #     with tf.control_dependencies([print_op, print_op_bis, print_op_ter,print_op_quad]):
                 logits = tf.where(
                     tf.equal(self.avail_acs_ph, 1), x=logits, y=mask)
                 # Log probs and actions
-            # with tf.variable_scope("policy_action", reuse=reuse):
                 self.log_pi = tf.nn.log_softmax(logits)
                 self.acs_onehot = tf.one_hot(
                     self.acs_ph, self.num_actions, dtype=tf.float32)

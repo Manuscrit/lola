@@ -20,7 +20,8 @@ def stop_forward(x):
 
 def build_policy(env, make_policy, scope, reuse=None, prev=None):
     """Creates and builds a new policy."""
-    pi = make_policy(env.ob_space_shape, env.NUM_ACTIONS, prev=prev)
+    print("env.ob_space_shape", env.ob_space_shape)
+    pi = make_policy(env.ob_space_shape, env.NUM_ACTIONS, prev=prev, batch_size=env.batch_size)
     pi.build(scope, reuse=reuse)
     return pi
 
@@ -313,7 +314,8 @@ def build_graph(env, make_policy, make_optimizer, *,
                 inner_asymm=True,
                 use_baseline=True,
                 use_dice=True,
-                use_opp_modeling=False):
+                use_opp_modeling=False,
+                batch_size=64):
     """Builds all components of the graph."""
     # Root policies.
     print("Building root policies...", end=""); sys.stdout.flush()

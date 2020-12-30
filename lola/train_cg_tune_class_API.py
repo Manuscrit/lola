@@ -3,6 +3,8 @@ Training funcion for the Coin Game.
 """
 import os
 import json
+from collections import Iterable
+from collections import deque
 
 from ray import tune
 
@@ -45,9 +47,13 @@ class LOLAPGCG(tune.Trainable):
                    clip_lola_correction_norm=False,
                    clip_lola_actor_norm=False, use_critic=False,
                    lr_decay=False, correction_reward_baseline_per_step=False,
+                   # is_training = True,
                    **kwargs):
 
         print("args not used:",kwargs)
+        # print("is_training",is_training)
+
+
 
         corrections = lola_update
 
@@ -107,6 +113,8 @@ class LOLAPGCG(tune.Trainable):
         self.lr_decay = lr_decay
         self.correction_reward_baseline_per_step = correction_reward_baseline_per_step
         self.use_critic = use_critic
+
+        self.obs_batch = deque(maxlen=self.batch_size)
 
         # Setting the training parameters
         self.y = gamma
@@ -197,7 +205,9 @@ class LOLAPGCG(tune.Trainable):
 
             self.init = tf.global_variables_initializer()
 
-            self.saver = tf.train.Saver(max_to_keep=5)
+            # self.saver = tf.train.Saver(max_to_keep=5)
+            self.saver = tf.train.Saver(tf.global_variables(), max_to_keep=5)
+            # + tf.get_collection_ref("batch_norm_non_trainable_variables_co‌​llection")
 
             self.trainables = tf.trainable_variables()
 
@@ -296,6 +306,10 @@ class LOLAPGCG(tune.Trainable):
             a_all = []
             lstm_state = []
             for agent_role, agent in enumerate(these_agents):
+                # print("s.shape", s.shape)
+                # print("s", s)
+                # print("lstm_state_old[agent].shape", lstm_state_old[agent].shape)
+                # print("lstm_state_old[agent]", lstm_state_old[agent])
                 a, lstm_s = self.sess.run(
                     [
                         self.mainPN_step[agent].predict,
@@ -303,7 +317,8 @@ class LOLAPGCG(tune.Trainable):
                     ],
                     feed_dict={
                         self.mainPN_step[agent].state_input: s,
-                        self.mainPN_step[agent].lstm_state: lstm_state_old[agent]
+                        self.mainPN_step[agent].lstm_state: lstm_state_old[agent],
+                        self.mainPN_step[agent].is_training: True,
                     }
                 )
                 lstm_state.append(lstm_s)
@@ -486,6 +501,8 @@ class LOLAPGCG(tune.Trainable):
                 self.mainPN_step[1].state_input: last_state,
                 self.mainPN_step[0].lstm_state: lstm_state[0],
                 self.mainPN_step[1].lstm_state: lstm_state[1],
+                self.mainPN_step[0].is_training: True,
+                self.mainPN_step[1].is_training: True,
             })
 
         if self.opp_model:
@@ -502,6 +519,8 @@ class LOLAPGCG(tune.Trainable):
                 self.mainPN_clone[1].sample_reward: sample_reward0,
                 self.mainPN_clone[0].gamma_array: np.reshape(discount, [1, -1]),
                 self.mainPN_clone[1].gamma_array: np.reshape(discount, [1, -1]),
+                self.mainPN_clone[0].is_training: True,
+                self.mainPN_clone[1].is_training: True,
             }
             num_loops = 50 if self.timestep == 0 else 1
             for _ in range(num_loops):
@@ -550,6 +569,8 @@ class LOLAPGCG(tune.Trainable):
                 np.reshape(self.discount_array, [1, -1]),
             self.mainPN[0].loss_multiplier: [lr_decay],
             self.mainPN[1].loss_multiplier: [lr_decay],
+            self.mainPN[0].is_training: True,
+            self.mainPN[1].is_training: True,
         }
         if self.opp_model:
             feed_dict.update({
@@ -749,12 +770,24 @@ class LOLAPGCG(tune.Trainable):
         return path
 
     def load_checkpoint(self, checkpoint_path):
+
+        checkpoint_path = os.path.expanduser(checkpoint_path)
         print('Loading Model...',checkpoint_path)
         with open(checkpoint_path, 'r') as f:
             checkpoint = json.load(f)
+        print("checkpoint", checkpoint)
 
-        ckpt = tf.train.get_checkpoint_state(checkpoint["tf_checkpoint_dir"],
+        # Support VM and local (manual) loading
+        tf_checkpoint_dir, _ = os.path.split(checkpoint_path)
+        # tail, head = os.path.split(checkpoint["tf_checkpoint_dir"])
+        # tf_checkpoint_dir = os.path.join(tail_json, head)
+        print("tf_checkpoint_dir", tf_checkpoint_dir)
+        ckpt = tf.train.get_checkpoint_state(tf_checkpoint_dir,
                                              latest_filename=f'{checkpoint["tf_checkpoint_filename"]}')
+        # print("ckpt",ckpt)
+        tail, head = os.path.split(ckpt.model_checkpoint_path)
+        ckpt.model_checkpoint_path = os.path.join(tf_checkpoint_dir, head)
+        # print("ckpt after",ckpt.__dict__)
         self.saver.restore(self.sess, ckpt.model_checkpoint_path)
 
         # RLLib method
@@ -775,21 +808,34 @@ class LOLAPGCG(tune.Trainable):
             raise ValueError(f"policy_id {policy_id}")
         return agent_n
 
-    def _preprocess_obs(self, single_obs):
+    def _preprocess_obs(self, single_obs, agent_to_use):
         single_obs = single_obs[None, ...]  # add batch dim
+
+        # Compensate for the batch norm not in evaluation mode
+        while len(self.obs_batch) < self.batch_size:
+            self.obs_batch.append(single_obs)
+        self.obs_batch.append(single_obs)
+        single_obs = np.concatenate(list(self.obs_batch), axis=0)
+
         return single_obs
 
     def _post_process_action(self, action):
+        # print("action", action)
+
+        # Compensate for the batch norm not in evaluation mode
+        if isinstance(action, Iterable):
+            action = action[-1]
+
         return action[None, ...]  # add batch dim
 
     def compute_actions(self, policy_id:str, obs_batch:list):
         # because of the LSTM
         assert len(obs_batch) == 1
 
+
         for single_obs in obs_batch:
             agent_to_use = self._get_agent_to_use(policy_id)
-            obs = self._preprocess_obs(single_obs)
-
+            obs = self._preprocess_obs(single_obs, agent_to_use)
             a, lstm_s = self.sess.run(
                 [
                     self.mainPN_step[agent_to_use].predict,
@@ -797,7 +843,8 @@ class LOLAPGCG(tune.Trainable):
                 ],
                 feed_dict={
                     self.mainPN_step[agent_to_use].state_input: obs,
-                    self.mainPN_step[agent_to_use].lstm_state: self.lstm_state[agent_to_use]
+                    self.mainPN_step[agent_to_use].lstm_state: self.lstm_state[agent_to_use],
+                    self.mainPN_step[agent_to_use].is_training: False,
                 }
             )
             self.lstm_state[agent_to_use] = lstm_s

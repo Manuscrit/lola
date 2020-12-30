@@ -5,7 +5,7 @@ import copy
 import tensorflow as tf
 import tensorflow.contrib.layers as layers
 from tensorflow.python.ops import math_ops
-
+from functools import partial
 from .utils import *
 
 
@@ -81,6 +81,8 @@ class Pnetwork:
                 dtype=tf.float32,
                 name='loss_multiplier')
 
+            self.is_training = tf.placeholder(tf.bool, name='is_training')
+
             with tf.variable_scope('input_proc', reuse=reuse):
                 # if not changed_config:
                 output = layers.convolution2d(self.state_input,
@@ -89,6 +91,36 @@ class Pnetwork:
                 output = layers.convolution2d(output,
                     stride=1, kernel_size=3, num_outputs=20,
                     normalizer_fn=layers.batch_norm, activation_fn=tf.nn.relu)
+                # output = layers.convolution2d(self.state_input,
+                #     stride=1, kernel_size=3, num_outputs=20,
+                #     normalizer_fn=partial(layers.batch_norm,
+                #                           is_training=self.is_training,
+                #                           # scale=True,
+                #                           # updates_collections=None,
+                #                           variables_collections=["batch_norm_non_trainable_variables_collection"]),
+                #                               activation_fn=tf.nn.relu)
+                # output = layers.convolution2d(output,
+                #     stride=1, kernel_size=3, num_outputs=20,
+                #     normalizer_fn=partial(layers.batch_norm,
+                #                           is_training=self.is_training,
+                #                           # scale=True,
+                #                           # updates_collections=None,
+                #                           variables_collections=["batch_norm_non_trainable_variables_collection"]),
+                #                               activation_fn=tf.nn.relu)
+                # output = layers.convolution2d(self.state_input,
+                #     stride=1, kernel_size=3, num_outputs=20,
+                #                               normalizer_fn = None, activation_fn=None)
+                #     # normalizer_fn=partial(tf.layers.batch_normalization, training=self.is_training),
+                #     #                           activation_fn=tf.nn.relu)
+                # output = tf.layers.batch_normalization(output, training=self.is_training)
+                # output = tf.nn.relu(output)
+                # output = layers.convolution2d(output,
+                #     stride=1, kernel_size=3, num_outputs=20,
+                #                               normalizer_fn=None, activation_fn=None)
+                # # normalizer_fn=partial(tf.layers.batch_normalization, training=self.is_training),
+                # #                               activation_fn=tf.nn.relu)
+                # output = tf.layers.batch_normalization(output, training=self.is_training)
+                # output = tf.nn.relu(output)
 
                 output = layers.flatten(output)
 

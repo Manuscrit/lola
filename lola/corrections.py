@@ -129,6 +129,8 @@ def corrections_func(mainPN, batch_size, trace_length,
     mainPN[0].grad_sum = tf.math.reduce_sum(v_0_grad_theta_0)
     mainPN[1].grad_sum = tf.math.reduce_sum(v_1_grad_theta_1)
 
+    # extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    # with tf.control_dependencies(extra_update_ops):
     mainPN[0].grad_v_1 = v_1_grad_theta_0
     mainPN[1].grad_v_0 = v_0_grad_theta_1
 

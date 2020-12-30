@@ -9,7 +9,7 @@ from gym.spaces import Discrete, Tuple
 from .common import OneHot
 
 
-class IteratedBoT(gym.Env):
+class IteratedAsymBoS(gym.Env):
     """
     A two-agent vectorized environment.
     Possible actions for each agent are (C)ooperate and (D)efect.
@@ -23,8 +23,8 @@ class IteratedBoT(gym.Env):
         self.ob_space_shape = [self.NUM_STATES]
         self.max_steps = max_steps
         self.batch_size = batch_size
-        self.payout_mat_ag_0 = np.array([[3., 0.], [0., 2.]])
-        self.payout_mat_ag_1 = np.array([[2., 0.], [0., 3.]])
+        self.payout_mat_ag_0 = np.array([[3.5, 0.], [0., 1.]])
+        self.payout_mat_ag_1 = np.array([[1., 0.], [0., 3.]])
         self.action_space = Tuple([
             Discrete(self.NUM_ACTIONS) for _ in range(self.NUM_AGENTS)
         ])

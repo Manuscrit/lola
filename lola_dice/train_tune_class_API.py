@@ -59,8 +59,8 @@ class LOLADICE(tune.Trainable):
         # Instantiate the environment
         if env == "IPD":
             self.env = lola_dice.envs.IPD(max_steps=trace_length, batch_size=batch_size)
-        elif env == "IBoT":
-            self.env = lola_dice.envs.IBoT(max_steps=trace_length, batch_size=batch_size)
+        elif env == "AsymBoS":
+            self.env = lola_dice.envs.AsymBoS(max_steps=trace_length, batch_size=batch_size)
         elif env == "IMP":
             self.env = lola_dice.envs.IMP(trace_length)
         elif env == "CoinGame":
